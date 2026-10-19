@@ -21,11 +21,16 @@ import { MediaModule } from './media/media.module';
 import { FeatureModule } from './clubs/feature/feature.module';
 import { CryptoModule } from './common/crypto/crypto.module';
 
+import { validateEnv } from './config/env';
+
 @Module({
   imports: [
     TimezoneModule,
     PrismaModule,
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validate: validateEnv,
+    }),
     ScheduleModule.forRoot(),
     GraphqlModule,
     // IAM modules

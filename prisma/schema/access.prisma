@@ -77,6 +77,8 @@ model UserIdentifier {
   userId String @map("user_id")
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  tokens UserToken[]
+
   @@index([userId])
   @@unique([type, value])
   @@map("user_identifiers")
@@ -84,6 +86,7 @@ model UserIdentifier {
 
 enum ENUserTokenType {
   EMAIL_VERIFICATION
+  PHONE_VERIFICATION
   CHANGE_PASSWORD
   LOGIN_OTP // Optional addition if you use OTP login
 }
@@ -104,12 +107,16 @@ model UserToken {
   userId String @map("user_id")
   user   User   @relation(fields: [userId], references: [id])
 
+  identifierId String?         @map("identifier_id")
+  identifier   UserIdentifier? @relation(fields: [identifierId], references: [id], onDelete: Cascade)
+
   // timestamps
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
   usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
 
   @@index([userId, type, status])
+  @@index([identifierId])
   @@map("user_tokens")
 }
 
@@ -122,7 +129,7 @@ model Invitation {
   id             String             @id @default(cuid())
   email          String?            @map("email")
   phone          String?            @map("phone")
-  tokenHash      String             @map("token_hash")
+  tokenHash      String             @unique @map("token_hash")
   failedAttempts Int                @default(0) @map("failed_attempts")
   type           ENMembershipType
   status         ENInvitationStatus @default(PENDING)

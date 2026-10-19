@@ -11,9 +11,14 @@ export const envSchema = z.object({
   JWT_ACCESS_TTL: ttl.default('15m'),
   REFRESH_TOKEN_TTL: ttl.default('30d'),
 
+  TOKEN_HASH_SECRET: z.string().min(32, 'must be at least 32 characters'),
+
   TWO_FACTOR_KEY: z
     .string()
     .refine((v) => Buffer.from(v, 'base64').length === 32, 'must be 32 bytes, base64-encoded'),
+
+  APP_URL: z.string().min(1),
+  FRONTEND_URL: z.string().optional(),
 });
 
 export type TEnv = z.infer<typeof envSchema>;
