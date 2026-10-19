@@ -35,7 +35,7 @@ export class PermissionResolver {
   getMyPermissions(
     @CurrentMembership() currentMembership: TActiveMembershipPayload,
   ) {
-    return currentMembership?.permissions || [];
+    return currentMembership?.membershipPermissions || [];
   }
 
   @Mutation(() => MembershipPermission, { name: 'grantPermission' })

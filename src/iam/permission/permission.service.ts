@@ -24,34 +24,91 @@ export class PermissionService {
   public async grantDirectPermission(
     targetMembershipId: string,
     permissionCode: string,
-  ) {}
-
-  public async revokeDirectPermission(
-    targetMembershipId: string,
-    permissionCode: string,
-    user_id: string,
   ) {
     const permission = await this.prisma.permission.findUnique({
       where: { code: permissionCode },
     });
 
-    if (!permission)
+    if (!permission) {
       throw new ResourceNotFoundException(
         `Permission '${permissionCode}' not found`,
         'Permission',
       );
+    }
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.membershipPermission.delete({
-        where: {
-          membershipId_permissionId: {
-            membershipId: targetMembershipId,
-            permissionId: permission.id,
-          },
+    return this.prisma.membershipPermission.upsert({
+      where: {
+        membershipId_permissionId: {
+          membershipId: targetMembershipId,
+          permissionId: permission.id,
         },
-      });
+      },
+      create: {
+        membershipId: targetMembershipId,
+        permissionId: permission.id,
+        action: 'GRANT',
+      },
+      update: {
+        action: 'GRANT',
+      },
+    });
+  }
+
+  public async revokeDirectPermission(
+    targetMembershipId: string,
+    permissionCode: string,
+    user_id?: string,
+  ) {
+    const permission = await this.prisma.permission.findUnique({
+      where: { code: permissionCode },
     });
 
-    return {};
+    if (!permission) {
+      throw new ResourceNotFoundException(
+        `Permission '${permissionCode}' not found`,
+        'Permission',
+      );
+    }
+
+    // Set action to REVOKE (explicit deny override)
+    return this.prisma.membershipPermission.upsert({
+      where: {
+        membershipId_permissionId: {
+          membershipId: targetMembershipId,
+          permissionId: permission.id,
+        },
+      },
+      create: {
+        membershipId: targetMembershipId,
+        permissionId: permission.id,
+        action: 'REVOKE',
+      },
+      update: {
+        action: 'REVOKE',
+      },
+    });
+  }
+
+  public async clearPermissionOverride(
+    targetMembershipId: string,
+    permissionCode: string,
+  ) {
+    const permission = await this.prisma.permission.findUnique({
+      where: { code: permissionCode },
+    });
+
+    if (!permission) {
+      throw new ResourceNotFoundException(
+        `Permission '${permissionCode}' not found`,
+        'Permission',
+      );
+    }
+
+    return this.prisma.membershipPermission.deleteMany({
+      where: {
+        membershipId: targetMembershipId,
+        permissionId: permission.id,
+      },
+    });
   }
 }

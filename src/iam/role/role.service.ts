@@ -25,7 +25,30 @@ export class RoleService {
     });
   }
 
-  public async getRole(role_id: string, clubId: string, membershipId: string) {}
+  public async getRole(role_id: string, clubId: string, membershipId: string) {
+    const role = await this.prisma.role.findUnique({
+      where: { id: role_id },
+      include: {
+        permissions: {
+          include: { permission: true },
+        },
+      },
+    });
+
+    if (!role) throw new ResourceNotFoundException('Role not found', 'role');
+
+    if (!role.isSystem && role.clubId !== clubId)
+      throw new BadRequestException('Role does not belong to the club');
+
+    const membershipRoles = await this.prisma.membershipRole.findMany({
+      where: {
+        membershipId,
+        roleId: role_id,
+      },
+    });
+
+    return { ...role, membershipRoles };
+  }
 
   public async updatedClubRole(
     role_id: string,
@@ -54,13 +77,56 @@ export class RoleService {
     targetMembershipId: string,
     roleCode: string,
     user_id: string,
-  ) {}
+    scope: any = 'OWN',
+    scopeId?: string,
+  ) {
+    const targetMembership = await this.prisma.membership.findUnique({
+      where: { id: targetMembershipId },
+    });
+    if (!targetMembership)
+      throw new ResourceNotFoundException(
+        'Target membership not found',
+        'membership',
+      );
+
+    if (targetMembership.clubId !== adminMembership.clubId)
+      throw new BadRequestException('Target membership does not belong to the same club');
+
+    const role = await this.prisma.role.findFirst({
+      where: {
+        code: roleCode,
+        OR: [{ clubId: adminMembership.clubId }, { isSystem: true }],
+      },
+    });
+    if (!role) throw new ResourceNotFoundException('Role not found', 'role');
+
+    return await this.prisma.membershipRole.upsert({
+      where: {
+        membershipId_roleId_scope_scopeId: {
+          membershipId: targetMembershipId,
+          roleId: role.id,
+          scope,
+          scopeId: scopeId ?? '',
+        },
+      },
+      create: {
+        membershipId: targetMembershipId,
+        roleId: role.id,
+        scope,
+        scopeId: scopeId ?? null,
+        assignedById: adminMembership.id,
+      },
+      update: {},
+    });
+  }
 
   public async revokeRole(
     adminMembership: TActiveMembershipPayload,
     targetMembershipId: string,
     roleCode: string,
     user_id: string,
+    scope?: any,
+    scopeId?: string,
   ) {
     // user_id is for the admin
     const targetMembership = await this.prisma.membership.findUnique({
@@ -72,8 +138,11 @@ export class RoleService {
         'membership',
       );
 
-    const role = await this.prisma.role.findUnique({
-      where: { code: roleCode },
+    const role = await this.prisma.role.findFirst({
+      where: {
+        code: roleCode,
+        OR: [{ clubId: adminMembership.clubId }, { isSystem: true }],
+      },
     });
     if (!role) throw new ResourceNotFoundException('Role not found', 'role');
 
@@ -82,13 +151,13 @@ export class RoleService {
         throw new BadRequestException('Role does not belong to the club');
 
     try {
-      await this.prisma.$transaction(async (tx) => {
-        await tx.membershipRole.deleteMany({
-          where: {
-            membershipId: targetMembershipId,
-            roleId: role.id,
-          },
-        });
+      await this.prisma.membershipRole.deleteMany({
+        where: {
+          membershipId: targetMembershipId,
+          roleId: role.id,
+          ...(scope ? { scope } : {}),
+          ...(scopeId !== undefined ? { scopeId } : {}),
+        },
       });
       return true;
     } catch (error) {
@@ -102,8 +171,11 @@ export class RoleService {
     user_id: string,
   ) {
     const { roleCode, name, description } = data;
-    const existingRole = await this.prisma.role.findUnique({
-      where: { code: roleCode },
+    const existingRole = await this.prisma.role.findFirst({
+      where: {
+        code: roleCode,
+        OR: [{ clubId }, { isSystem: true }],
+      },
     });
     if (existingRole)
       throw new BadRequestException('Role with same code already exists');
