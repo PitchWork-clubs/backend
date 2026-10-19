@@ -18,7 +18,7 @@ declare global {
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   constructor(private readonly configService: ConfigService) {
-    const jwtSecret = configService.get<string>('JWT_SECRET') ?? '';
+    const jwtSecret = configService.getOrThrow<string>('JWT_ACCESS_SECRET');
 
     super({
       jwtFromRequest: ExtractJwt.fromExtractors([
@@ -28,6 +28,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
             token = request.cookies['accessToken'];
           return token;
         },
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
       ]),
       ignoreExpiration: false,
       secretOrKey: jwtSecret,

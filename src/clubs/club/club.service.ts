@@ -120,8 +120,8 @@ export class ClubService {
         });
 
         // Assign ADMIN role to creator
-        const adminRole = await tx.role.findUnique({
-          where: { code: 'ADMIN' },
+        const adminRole = await tx.role.findFirst({
+          where: { code: 'ADMIN', isSystem: true },
         });
 
         if (adminRole) {
@@ -129,6 +129,7 @@ export class ClubService {
             data: {
               membershipId: ownerMembership.id,
               roleId: adminRole.id,
+              scope: 'CLUB',
             },
           });
           // NO membershipPermission records inserted here!
