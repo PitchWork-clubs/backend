@@ -5,6 +5,7 @@ import {
   createDecipheriv,
   createHmac,
   randomBytes,
+  randomInt,
   timingSafeEqual,
 } from 'node:crypto';
 
@@ -20,9 +21,17 @@ export class CryptoService {
   private readonly hmacSecret: string;
 
   constructor(private readonly config: ConfigService<TEnv, true>) {
-    const raw2faKey = this.config.get<string>('TWO_FACTOR_KEY', { infer: true });
+    const raw2faKey = this.config.getOrThrow<string>('TWO_FACTOR_KEY', {
+      infer: true,
+    });
     this.twoFactorKey = Buffer.from(raw2faKey, 'base64');
-    this.hmacSecret = this.config.get<string>('TOKEN_HASH_SECRET', { infer: true });
+    this.hmacSecret = this.config.getOrThrow<string>('TOKEN_HASH_SECRET', {
+      infer: true,
+    });
+
+    if (this.twoFactorKey.length !== 32) {
+      throw new Error('TWO_FACTOR_KEY must decode to exactly 32 bytes');
+    }
   }
 
   // --- AES-256-GCM ---
@@ -68,8 +77,8 @@ export class CryptoService {
     userId?: string,
     type?: string,
   ): { otp: string; hash: string } {
-    // 6-digit numeric OTP (e.g. "123456")
-    const num = Math.floor(100000 + Math.random() * 900000).toString();
+    // 6-digit numeric OTP (e.g. "123456") using the OS CSPRNG.
+    const num = randomInt(100000, 1000000).toString();
     const hashKey = userId && type ? `otp:${userId}:${type}:${num}` : num;
     const hash = this.computeHash(hashKey);
     return { otp: num, hash };

@@ -969,6 +969,13 @@ When adding or significantly changing public endpoints:
 
 Commit messages should be descriptive.
 
+Keep changes modular and commit each coherent feature or concern separately.
+Do not combine unrelated authentication, infrastructure, schema, refactoring,
+and testing changes into one commit. Before committing, review the staged file
+list and ensure the commit can be described by one clear purpose. Use follow-up
+commits for tests, documentation, configuration, or fixes that are logically
+separate from the feature implementation.
+
 Use:
 
 ```text

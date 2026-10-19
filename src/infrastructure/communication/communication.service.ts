@@ -1,9 +1,22 @@
-import { MailerService } from '@nestjs-modules/mailer';
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+} from '@nestjs/common';
+import {
+  EMAIL_PROVIDER,
+  IEmailProvider,
+} from './email/email-provider.interface';
+import {
+  ISmsProvider,
+  SMS_PROVIDER,
+} from './sms/sms-provider.interface';
 
 @Injectable()
 export class CommunicationService {
-  constructor(private readonly mailerService: MailerService) {}
+  constructor(
+    @Inject(EMAIL_PROVIDER) private readonly emailProvider: IEmailProvider,
+    @Inject(SMS_PROVIDER) private readonly smsProvider: ISmsProvider,
+  ) {}
 
   public async sendEmail(
     to: string,
@@ -11,16 +24,15 @@ export class CommunicationService {
     body: string,
     htmlBody?: string,
   ) {
-    try {
-      await this.mailerService.sendMail({
-        to,
-        subject,
-        text: body,
-        html: htmlBody,
-      });
-    } catch (error) {
-      console.error(error); // for debugging
-      throw new InternalServerErrorException('Failed to send email');
-    }
+    await this.emailProvider.sendEmail({
+      to,
+      subject,
+      text: body,
+      html: htmlBody,
+    });
+  }
+
+  public async sendSms(to: string, body: string): Promise<void> {
+    await this.smsProvider.sendSms(to, body);
   }
 }
