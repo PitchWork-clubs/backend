@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { CommunicationService } from './communication.service';
-import { MailerModule } from '@nestjs-modules/mailer';
+import { MailerModule, MailerOptions } from '@nestjs-modules/mailer';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { LogSmsProvider } from './sms/log-sms.provider';
 import { UnavailableSmsProvider } from './sms/unavailable-sms.provider';
@@ -14,14 +14,16 @@ import { MailerEmailProvider } from './email/mailer-email.provider';
     MailerModule.forRootAsync({
       inject: [ConfigService],
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => ({
+      useFactory: (configService: ConfigService): MailerOptions => ({
         transport: {
           host: configService.get('MAIL_HOST') || '127.0.0.1',
           port: configService.get('MAIL_PORT') || 1025,
           ignoreTLS: true,
           secure: false,
         },
-        defaults: { from: `"Pitchwork" <${configService.get('MAIL_FROM')}>` },
+        defaults: {
+          from: `"Pitchwork" <${configService.get('MAIL_FROM')}>`,
+        } as MailerOptions['defaults'],
       }),
     }),
   ],
