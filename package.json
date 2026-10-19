@@ -46,8 +46,8 @@
     "@nestjs/swagger": "^11.4.7",
     "@nestjs/throttler": "^6.7.1",
     "@paralleldrive/cuid2": "^3.3.0",
-    "@prisma/adapter-pg": "^7.9.1",
-    "@prisma/client": "^7.9.1",
+    "@prisma/adapter-pg": "7.9.1",
+    "@prisma/client": "7.9.1",
     "argon2": "^0.45.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
@@ -97,7 +97,7 @@
     "globals": "^17.0.0",
     "jest": "^30.0.0",
     "prettier": "^3.4.2",
-    "prisma": "^7.9.1",
+    "prisma": "7.9.1",
     "prisma-nestjs-graphql": "^23.2.1",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
@@ -115,6 +115,12 @@
     },
     "preview-email": {
       "nodemailer": "10.1.7"
+    },
+    "@prisma/config": {
+      "deepmerge-ts": "8.0.2"
+    },
+    "prisma": {
+      "mysql2": "3.24.4"
     }
   },
   "jest": {
