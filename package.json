@@ -119,6 +119,17 @@
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },
+    "moduleNameMapper": {
+      "^@common/(.*)$": "<rootDir>/common/$1",
+      "^@infrastructure/(.*)$": "<rootDir>/infrastructure/$1",
+      "^@iam/(.*)$": "<rootDir>/iam/$1",
+      "^@clubs/(.*)$": "<rootDir>/clubs/$1",
+      "^@athletes/(.*)$": "<rootDir>/athletes/$1",
+      "^@teams/(.*)$": "<rootDir>/teams/$1",
+      "^@tasks/(.*)$": "<rootDir>/tasks/$1",
+      "^@generated/(.*)$": "<rootDir>/@generated/$1",
+      "^@paralleldrive/cuid2$": "<rootDir>/test-mocks/cuid2"
+    },
     "collectCoverageFrom": [
       "**/*.(t|j)s"
     ],
