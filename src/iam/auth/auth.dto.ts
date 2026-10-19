@@ -10,8 +10,10 @@ import {
   IsISO31661Alpha2,
   ValidateIf,
   IsPhoneNumber,
+  IsOptional,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
+import { PhoneNumberFormat, PhoneNumberUtil } from 'google-libphonenumber';
 import * as nationalities from 'i18n-nationality';
 import * as countries from 'i18n-iso-countries';
 import * as isoCountry from 'i18n-iso-countries/langs/en.json';
@@ -19,6 +21,21 @@ import * as isoLang from 'i18n-nationality/langs/en.json';
 
 nationalities.registerLocale(isoLang);
 countries.registerLocale(isoCountry);
+
+const phoneUtil = PhoneNumberUtil.getInstance();
+
+function normalizePhone(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+
+  const trimmed = value.trim();
+  try {
+    const parsed = phoneUtil.parseAndKeepRawInput(trimmed);
+    return phoneUtil.format(parsed, PhoneNumberFormat.E164);
+  } catch {
+    // Leave invalid input intact so class-validator can return the validation error.
+    return trimmed;
+  }
+}
 
 export class RegisteringPersonDto {
   @Transform(({ value }: { value: string | undefined }) => value?.trim().toLowerCase())
@@ -58,13 +75,13 @@ export class RegisteringPersonDto {
 
 export class RegisterUserDto {
   @ValidateIf(o => !o.phone || o.email)
-  @Transform(({ value }: { value: string  }) => value?.trim().toLowerCase())
+  @Transform(({ value }: { value: string }) => value?.trim().toLowerCase())
   @IsString()
   @IsEmail()
   email?: string;
 
   @ValidateIf(o => !o.email || o.phone)
-  @Transform(({ value }: { value: string  }) => value?.trim().toLowerCase())
+  @Transform(({ value }: { value: string }) => normalizePhone(value))
   @IsString()
   @IsPhoneNumber(undefined, { message: 'Invalid Phone Number' })
   phone?: string;
@@ -72,6 +89,11 @@ export class RegisterUserDto {
   @IsString()
   @MinLength(5)
   password!: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: string | undefined }) => value?.trim())
+  @IsString()
+  invitationToken?: string;
 }
 
 export class RegisterUserPersonDto extends IntersectionType(

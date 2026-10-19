@@ -38,21 +38,17 @@ export class AuthController {
   @Post('/signup')
   public async register(
     @Body() registerDto: RegisterUserPersonDto,
-    @Res({ passthrough: true }) res: Response,
   ) {
     const userData = await this.authService.registerUserPerson(registerDto);
 
-    await this.authService.assignCookie(
-      {
-        sub: userData.user_id,
-        person_id: userData.person_id,
-      },
-      res,
-    );
-
     return {
-      message: 'Registered successfully',
-      user: userData,
+      message: 'If the identifier can be registered, verification instructions will be sent.',
+      user: 'duplicate' in userData
+        ? undefined
+        : userData,
+      ...(userData.verificationRequired && !('duplicate' in userData)
+        ? { verification: { required: true, channel: userData.verificationChannel } }
+        : {}),
     };
   }
 

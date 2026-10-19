@@ -3,6 +3,15 @@ export type TPayload = {
   person_id: string;
 };
 
+export type TRegistrationResult = {
+  user_id: string;
+  person_id: string;
+  name: string;
+  isEmailVerified: boolean;
+  verificationRequired: boolean;
+  verificationChannel: 'email' | 'phone';
+};
+
 export type TCurrentUser = {
   user_id: string;
   person_id: string;
