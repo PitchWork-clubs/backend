@@ -5,7 +5,12 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '@infrastructure/prisma/prisma.service';
-import { LoginDto, RegisterUserPersonDto } from './auth.dto';
+import {
+  LoginDto,
+  RegisterUserPersonDto,
+  ResendVerificationDto,
+  VerifyIdentifierDto,
+} from './auth.dto';
 import * as argon2 from 'argon2';
 import {
   ENIdentifierType,
@@ -22,7 +27,11 @@ import { ResourceNotFoundException } from '@common/exceptions/resource-not-found
 import { TimezoneService } from '@common/timezone/timezone.service';
 import { ConfigService } from '@nestjs/config';
 import { CommunicationService } from '@infrastructure/communication/communication.service';
-import { generateApplicationToken, generateOtp, computeTokenHash } from '@common/utils/token-hash.util';
+import {
+  generateApplicationToken,
+  generateOtp,
+  computeTokenHash,
+} from '@common/utils/token-hash.util';
 
 export type TUserWithPerson = Prisma.UserGetPayload<{
   include: { person: true };
@@ -43,7 +52,7 @@ export class AuthService {
       user_id: user.id,
       person_id: user.person.id,
       name: `${user.person.firstName} ${user.person.lastName}`,
-      email: "",
+      email: '',
       isEmailVerified: user.isEmailVerified,
     };
   }
@@ -71,11 +80,14 @@ export class AuthService {
     const adultCutoff = new Date(now);
     adultCutoff.setUTCFullYear(adultCutoff.getUTCFullYear() - 18);
     if (dob > adultCutoff) {
-      throw new BadRequestException('You must be at least 18 years old to register.');
+      throw new BadRequestException(
+        'You must be at least 18 years old to register.',
+      );
     }
 
     const hashedPassword = await argon2.hash(registerDto.password);
-    const tokenSecret = this.configService.getOrThrow<string>('TOKEN_HASH_SECRET');
+    const tokenSecret =
+      this.configService.getOrThrow<string>('TOKEN_HASH_SECRET');
     const invitationHash = registerDto.invitationToken
       ? computeTokenHash(tokenSecret, registerDto.invitationToken)
       : undefined;
@@ -95,7 +107,10 @@ export class AuthService {
     try {
       await this.prisma.$transaction(async (tx) => {
         let invitation:
-          | (Prisma.InvitationGetPayload<{}> & { email: string | null; phone: string | null })
+          | (Prisma.InvitationGetPayload<{}> & {
+              email: string | null;
+              phone: string | null;
+            })
           | null = null;
 
         if (invitationHash) {
@@ -121,7 +136,8 @@ export class AuthService {
         const newUser = await tx.user.create({
           data: {
             passwordHash: hashedPassword,
-            isEmailVerified: primaryType === ENIdentifierType.EMAIL && isVerified,
+            isEmailVerified:
+              primaryType === ENIdentifierType.EMAIL && isVerified,
             person: {
               create: {
                 firstName: registerDto.firstName,
@@ -163,7 +179,9 @@ export class AuthService {
               hash: verificationHash,
               userId: newUser.id,
               identifierId: newUser.identifiers[0].id,
-              expiresAt: new Date(now.getTime() + (email ? 30 : 10) * 60 * 1000),
+              expiresAt: new Date(
+                now.getTime() + (email ? 30 : 10) * 60 * 1000,
+              ),
             },
           });
         }
@@ -206,7 +224,9 @@ export class AuthService {
         // Password hashing above intentionally happens before the transaction, so
         // duplicate registrations do not have a noticeably cheaper code path.
         if (email) {
-          await this.sendDuplicateRegistrationNotice(email).catch(() => undefined);
+          await this.sendDuplicateRegistrationNotice(email).catch(
+            () => undefined,
+          );
         }
         return {
           duplicate: true as const,
@@ -244,6 +264,231 @@ export class AuthService {
       'Pitchwork registration request',
       'A registration attempt was made using this email address. If this was you, sign in or use the password recovery flow. If it was not you, no action is required.',
     );
+  }
+
+  private readonly verificationFailureMessage = 'Invalid or expired code';
+  private readonly resendMessage =
+    'If the identifier is unverified, verification instructions will be sent.';
+
+  private verificationFailure(): never {
+    throw new BadRequestException(this.verificationFailureMessage);
+  }
+
+  private identifierType(value: string): ENIdentifierType {
+    return value.includes('@')
+      ? ENIdentifierType.EMAIL
+      : ENIdentifierType.PHONE;
+  }
+
+  public async verifyIdentifier(dto: VerifyIdentifierDto) {
+    const secret = this.configService.getOrThrow<string>('TOKEN_HASH_SECRET');
+    const submittedToken = dto.token?.trim();
+    const submittedCode = dto.code?.trim().toUpperCase();
+    let token: any;
+
+    if (submittedToken) {
+      token = await this.prisma.userToken.findUnique({
+        where: { hash: computeTokenHash(secret, submittedToken) },
+        include: { identifier: true },
+      });
+    } else if (dto.identifier && submittedCode) {
+      const identifier = await this.prisma.userIdentifier.findUnique({
+        where: {
+          type_value: {
+            type: this.identifierType(dto.identifier),
+            value: dto.identifier,
+          },
+        },
+      });
+
+      if (identifier) {
+        token = await this.prisma.userToken.findFirst({
+          where: {
+            identifierId: identifier.id,
+            type:
+              identifier.type === ENIdentifierType.EMAIL
+                ? ENUserTokenType.EMAIL_VERIFICATION
+                : ENUserTokenType.PHONE_VERIFICATION,
+            status: 'PENDING',
+            usedAt: null,
+          },
+          orderBy: { createdAt: 'desc' },
+          include: { identifier: true },
+        });
+
+        if (token) {
+          // Count the attempt before comparing the submitted code.
+          await this.prisma.userToken.updateMany({
+            where: {
+              id: token.id,
+              status: 'PENDING',
+              usedAt: null,
+            },
+            data: {
+              attempts: { increment: 1 },
+            },
+          });
+          token.attempts += 1;
+        }
+      }
+    }
+
+    const codeMatches =
+      Boolean(submittedToken) ||
+      (Boolean(submittedCode) &&
+        computeTokenHash(secret, submittedCode!) === token?.hash);
+
+    if (
+      !token ||
+      !token.identifier ||
+      token.type === ENUserTokenType.CHANGE_PASSWORD ||
+      token.type === ENUserTokenType.LOGIN_OTP ||
+      token.status !== 'PENDING' ||
+      token.usedAt ||
+      token.expiresAt <= new Date() ||
+      (submittedToken && token.attempts >= 5) ||
+      !codeMatches
+    ) {
+      if (token && !submittedToken && token.attempts >= 5) {
+        await this.prisma.userToken.updateMany({
+          where: { id: token.id, status: 'PENDING', usedAt: null },
+          data: { status: 'DISRUPTED' },
+        });
+      }
+      this.verificationFailure();
+    }
+
+    const now = this.timezoneService.nowUtc();
+    const result = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.userToken.updateMany({
+        where: {
+          id: token.id,
+          status: 'PENDING',
+          usedAt: null,
+          expiresAt: { gt: now },
+          // A correct code may be accepted on the fifth attempt. Failed
+          // attempt five is disrupted before reaching this transaction.
+          attempts: { lt: 6 },
+        },
+        data: { usedAt: now },
+      });
+
+      if (claimed.count !== 1) return false;
+
+      const verified = await tx.userIdentifier.updateMany({
+        where: { id: token.identifier.id, verifiedAt: null },
+        data: { verifiedAt: now },
+      });
+
+      if (token.identifier.type === ENIdentifierType.EMAIL) {
+        await tx.user.update({
+          where: { id: token.userId },
+          data: { isEmailVerified: true },
+        });
+      }
+
+      return verified.count === 1;
+    });
+
+    if (!result) this.verificationFailure();
+
+    return { message: 'Identifier verified successfully.' };
+  }
+
+  public async resendVerification(dto: ResendVerificationDto) {
+    const identifierValue = dto.identifier?.trim();
+    if (!identifierValue) return { message: this.resendMessage };
+
+    const type = this.identifierType(identifierValue);
+    const now = this.timezoneService.nowUtc();
+    const secret = this.configService.getOrThrow<string>('TOKEN_HASH_SECRET');
+    let delivery:
+      | {
+          type: ENIdentifierType;
+          value: string;
+          firstName: string;
+          token: string;
+        }
+      | undefined;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const identifier = await tx.userIdentifier.findUnique({
+        where: { type_value: { type, value: identifierValue } },
+        include: { user: { include: { person: true } } },
+      });
+
+      if (!identifier || identifier.verifiedAt) return false;
+
+      const latest = await tx.userToken.findFirst({
+        where: {
+          identifierId: identifier.id,
+          type:
+            type === ENIdentifierType.EMAIL
+              ? ENUserTokenType.EMAIL_VERIFICATION
+              : ENUserTokenType.PHONE_VERIFICATION,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (latest && now.getTime() - latest.createdAt.getTime() < 60_000) {
+        return false;
+      }
+
+      const generated =
+        type === ENIdentifierType.EMAIL
+          ? generateApplicationToken(secret)
+          : generateOtp(secret);
+      const tokenType =
+        type === ENIdentifierType.EMAIL
+          ? ENUserTokenType.EMAIL_VERIFICATION
+          : ENUserTokenType.PHONE_VERIFICATION;
+
+      await tx.userToken.updateMany({
+        where: {
+          identifierId: identifier.id,
+          type: tokenType,
+          status: 'PENDING',
+        },
+        data: { status: 'DISRUPTED' },
+      });
+      await tx.userToken.create({
+        data: {
+          type: tokenType,
+          hash: generated.hash,
+          userId: identifier.userId,
+          identifierId: identifier.id,
+          expiresAt: new Date(
+            now.getTime() +
+              (type === ENIdentifierType.EMAIL ? 30 : 10) * 60_000,
+          ),
+        },
+      });
+
+      delivery = {
+        type,
+        value: identifierValue,
+        firstName: identifier.user.person.firstName,
+        token: 'token' in generated ? generated.token : generated.otp,
+      };
+      return true;
+    });
+
+    if (created && delivery) {
+      if (delivery.type === ENIdentifierType.EMAIL) {
+        await this.sendRegistrationVerificationEmail(
+          delivery.value,
+          delivery.firstName,
+          delivery.token,
+        );
+      } else {
+        await this.communicationService.sendSms(
+          delivery.value,
+          `Your Pitchwork verification code is ${delivery.token}. It expires in 10 minutes.`,
+        );
+      }
+    }
+
+    return { message: this.resendMessage };
   }
 
   public async getUserData(user_id: string, person_id: string) {

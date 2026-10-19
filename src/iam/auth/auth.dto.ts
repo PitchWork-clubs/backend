@@ -38,11 +38,15 @@ function normalizePhone(value: unknown): unknown {
 }
 
 export class RegisteringPersonDto {
-  @Transform(({ value }: { value: string | undefined }) => value?.trim().toLowerCase())
+  @Transform(({ value }: { value: string | undefined }) =>
+    value?.trim().toLowerCase(),
+  )
   @IsString()
   firstName!: string;
 
-  @Transform(({ value }: { value: string | undefined  }) => value?.trim().toLowerCase())
+  @Transform(({ value }: { value: string | undefined }) =>
+    value?.trim().toLowerCase(),
+  )
   @IsString()
   lastName!: string;
 
@@ -54,8 +58,10 @@ export class RegisteringPersonDto {
   dob!: Date;
 
   @IsString()
-  @Transform(({ value }: { value: string | undefined  }) => value?.trim().toLowerCase())
-  @Transform(({ value }: { value: string | undefined  }) => {
+  @Transform(({ value }: { value: string | undefined }) =>
+    value?.trim().toLowerCase(),
+  )
+  @Transform(({ value }: { value: string | undefined }) => {
     if (typeof value !== 'string') return value;
 
     const nationalityCode = nationalities.getAlpha2Code(value, 'en');
@@ -74,13 +80,13 @@ export class RegisteringPersonDto {
 }
 
 export class RegisterUserDto {
-  @ValidateIf(o => !o.phone || o.email)
+  @ValidateIf((o) => !o.phone || o.email)
   @Transform(({ value }: { value: string }) => value?.trim().toLowerCase())
   @IsString()
   @IsEmail()
   email?: string;
 
-  @ValidateIf(o => !o.email || o.phone)
+  @ValidateIf((o) => !o.email || o.phone)
   @Transform(({ value }: { value: string }) => normalizePhone(value))
   @IsString()
   @IsPhoneNumber(undefined, { message: 'Invalid Phone Number' })
@@ -102,3 +108,40 @@ export class RegisterUserPersonDto extends IntersectionType(
 ) {}
 
 export class LoginDto extends RegisterUserDto {}
+
+export class VerifyIdentifierDto {
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsString()
+  token?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (trimmed.includes('@')) return trimmed.toLowerCase();
+    return normalizePhone(trimmed);
+  })
+  @IsString()
+  identifier?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim().toUpperCase() : value,
+  )
+  @IsString()
+  code?: string;
+}
+
+export class ResendVerificationDto {
+  @Transform(({ value }: { value: unknown }) => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (trimmed.includes('@')) return trimmed.toLowerCase();
+    return normalizePhone(trimmed);
+  })
+  @IsString()
+  identifier!: string;
+}

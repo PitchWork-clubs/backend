@@ -11,7 +11,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { LoginDto, RegisterUserPersonDto } from './auth.dto';
+import {
+  LoginDto,
+  RegisterUserPersonDto,
+  ResendVerificationDto,
+  VerifyIdentifierDto,
+} from './auth.dto';
 import { Response } from 'express';
 import {
   PassportJwtGuard,
@@ -36,18 +41,20 @@ export class AuthController {
 
   @HttpCode(HttpStatus.CREATED)
   @Post('/signup')
-  public async register(
-    @Body() registerDto: RegisterUserPersonDto,
-  ) {
+  public async register(@Body() registerDto: RegisterUserPersonDto) {
     const userData = await this.authService.registerUserPerson(registerDto);
 
     return {
-      message: 'If the identifier can be registered, verification instructions will be sent.',
-      user: 'duplicate' in userData
-        ? undefined
-        : userData,
+      message:
+        'If the identifier can be registered, verification instructions will be sent.',
+      user: 'duplicate' in userData ? undefined : userData,
       ...(userData.verificationRequired && !('duplicate' in userData)
-        ? { verification: { required: true, channel: userData.verificationChannel } }
+        ? {
+            verification: {
+              required: true,
+              channel: userData.verificationChannel,
+            },
+          }
         : {}),
     };
   }
@@ -98,6 +105,18 @@ export class AuthController {
   }
 
   @HttpCode(HttpStatus.OK)
+  @Post('verify')
+  public async verifyIdentifier(@Body() data: VerifyIdentifierDto) {
+    return await this.authService.verifyIdentifier(data);
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('verify/resend')
+  public async resendVerification(@Body() data: ResendVerificationDto) {
+    return await this.authService.resendVerification(data);
+  }
+
+  @HttpCode(HttpStatus.OK)
   @Post('email/send-verify')
   public async sendVerifyEmail(@Body() data: SendVerifyEmailDto) {
     return await this.userTokenService.sendVerifyEmail(data.email);
@@ -106,7 +125,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @Put('email/verify')
   public async verifyEMail(@Body() data: VerifyEmailDto) {
-    return await this.userTokenService.verifyEmail(data.email, data.token);
+    return await this.authService.verifyIdentifier({ token: data.token });
   }
 
   /**
@@ -124,10 +143,9 @@ export class AuthController {
     @Query('email') email: string,
     @Query('token') token: string,
   ) {
-    return await this.userTokenService.verifyEmail(
-      email?.trim().toLowerCase(),
-      token?.trim().toUpperCase(),
-    );
+    return await this.authService.verifyIdentifier({
+      token: token?.trim(),
+    });
   }
 
   @Post('password/forgot')
