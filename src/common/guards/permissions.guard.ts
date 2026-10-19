@@ -59,6 +59,26 @@ export class PermissionsGuard implements CanActivate {
       );
     }
 
+    // If target resource is in route parameters, verify specific scope
+    if (req.accessContext) {
+      const teamId = (req.params?.teamId as string) || undefined;
+      const personId =
+        (req.params?.personId as string) ||
+        (req.params?.athleteId as string) ||
+        undefined;
+
+      if (teamId || personId) {
+        const failedScope = requiredPermissions.find(
+          (code) => !req.accessContext!.allows(code, { teamId, personId }),
+        );
+        if (failedScope) {
+          throw new ForbiddenException(
+            `Access denied for permission '${failedScope}' on this resource scope.`,
+          );
+        }
+      }
+    }
+
     return true;
   }
 

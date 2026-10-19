@@ -4,10 +4,9 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { PrismaService } from '@infrastructure/prisma/prisma.service';
-import { AuditLogsService } from '@infrastructure/audit-logs/audit-logs.service';
 import { TActiveMembershipPayload } from '@common/guards/active-membership.guard';
 import { parsePrismaError } from '@common/utils/error-handler';
-import { ENAuditCategory, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { ResourceNotFoundException } from '@common/exceptions/resource-not-found';
 import { CreateRoleDto, UpdateRoleDto } from './role.dto';
 import { UpdateClubDto } from '@clubs/club/club.dto';
@@ -16,7 +15,6 @@ import { UpdateClubDto } from '@clubs/club/club.dto';
 export class RoleService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly auditLogsService: AuditLogsService,
   ) {}
 
   public async getRolesInClub(clubId: string) {
@@ -30,27 +28,26 @@ export class RoleService {
   public async getRole(role_id: string, clubId: string, membershipId: string) {
     const role = await this.prisma.role.findUnique({
       where: { id: role_id },
-    });
-
-    if (!role) throw new ResourceNotFoundException('Role not found', 'role');
-
-    if (!role.isSystem)
-      if (role.clubId !== clubId)
-        throw new BadRequestException('Role does not belong to the club');
-
-    const membershipRole = await this.prisma.membershipRole.findUnique({
-      where: {
-        membershipId_roleId: {
-          membershipId,
-          roleId: role_id,
+      include: {
+        permissions: {
+          include: { permission: true },
         },
       },
     });
 
-    if (!membershipRole)
-      throw new BadRequestException('Role is not assigned to you');
+    if (!role) throw new ResourceNotFoundException('Role not found', 'role');
 
-    return { ...role, ...membershipRole };
+    if (!role.isSystem && role.clubId !== clubId)
+      throw new BadRequestException('Role does not belong to the club');
+
+    const membershipRoles = await this.prisma.membershipRole.findMany({
+      where: {
+        membershipId,
+        roleId: role_id,
+      },
+    });
+
+    return { ...role, membershipRoles };
   }
 
   public async updatedClubRole(
@@ -72,14 +69,6 @@ export class RoleService {
       data: { name, description },
     });
 
-    await this.auditLogsService.createLog({
-      category: ENAuditCategory.AUTH,
-      action: 'updateRole',
-      entityType: 'Role',
-      metadata: { roleId: role_id },
-      createdBy: user_id,
-    });
-
     return updatedRole;
   }
 
@@ -88,6 +77,8 @@ export class RoleService {
     targetMembershipId: string,
     roleCode: string,
     user_id: string,
+    scope: any = 'OWN',
+    scopeId?: string,
   ) {
     const targetMembership = await this.prisma.membership.findUnique({
       where: { id: targetMembershipId },
@@ -98,51 +89,35 @@ export class RoleService {
         'membership',
       );
 
-    const role = await this.prisma.role.findUnique({
-      where: { code: roleCode },
+    if (targetMembership.clubId !== adminMembership.clubId)
+      throw new BadRequestException('Target membership does not belong to the same club');
+
+    const role = await this.prisma.role.findFirst({
+      where: {
+        code: roleCode,
+        OR: [{ clubId: adminMembership.clubId }, { isSystem: true }],
+      },
     });
     if (!role) throw new ResourceNotFoundException('Role not found', 'role');
 
-    if (!role.isSystem)
-      if (role.clubId !== adminMembership.clubId)
-        throw new BadRequestException('Role does not belong to the club');
-
-    try {
-      await this.prisma.$transaction(async (tx) => {
-        await tx.membershipRole.upsert({
-          where: {
-            membershipId_roleId: {
-              membershipId: targetMembershipId,
-              roleId: role.id,
-            },
-          },
-          create: {
-            membershipId: targetMembershipId,
-            roleId: role.id,
-            assignedById: adminMembership.id,
-          },
-          update: {},
-        });
-
-        await this.auditLogsService.createLog(
-          {
-            category: ENAuditCategory.AUTH,
-            action: 'assignRole',
-            entityType: 'Role, Membership',
-            metadata: {
-              roleCode,
-              targetMembershipId,
-              adminMembershipId: adminMembership.id,
-            },
-            createdBy: user_id,
-          },
-          tx,
-        );
-      });
-      return true;
-    } catch (error) {
-      throw new InternalServerErrorException(parsePrismaError(error));
-    }
+    return await this.prisma.membershipRole.upsert({
+      where: {
+        membershipId_roleId_scope_scopeId: {
+          membershipId: targetMembershipId,
+          roleId: role.id,
+          scope,
+          scopeId: scopeId ?? '',
+        },
+      },
+      create: {
+        membershipId: targetMembershipId,
+        roleId: role.id,
+        scope,
+        scopeId: scopeId ?? null,
+        assignedById: adminMembership.id,
+      },
+      update: {},
+    });
   }
 
   public async revokeRole(
@@ -150,6 +125,8 @@ export class RoleService {
     targetMembershipId: string,
     roleCode: string,
     user_id: string,
+    scope?: any,
+    scopeId?: string,
   ) {
     // user_id is for the admin
     const targetMembership = await this.prisma.membership.findUnique({
@@ -161,8 +138,11 @@ export class RoleService {
         'membership',
       );
 
-    const role = await this.prisma.role.findUnique({
-      where: { code: roleCode },
+    const role = await this.prisma.role.findFirst({
+      where: {
+        code: roleCode,
+        OR: [{ clubId: adminMembership.clubId }, { isSystem: true }],
+      },
     });
     if (!role) throw new ResourceNotFoundException('Role not found', 'role');
 
@@ -171,28 +151,13 @@ export class RoleService {
         throw new BadRequestException('Role does not belong to the club');
 
     try {
-      await this.prisma.$transaction(async (tx) => {
-        await tx.membershipRole.deleteMany({
-          where: {
-            membershipId: targetMembershipId,
-            roleId: role.id,
-          },
-        });
-
-        await this.auditLogsService.createLog(
-          {
-            category: ENAuditCategory.AUTH,
-            action: 'revokeRole',
-            entityType: 'Role, Membership',
-            metadata: {
-              roleCode,
-              targetMembershipId,
-              adminMembershipId: adminMembership.id,
-            },
-            createdBy: user_id,
-          },
-          tx,
-        );
+      await this.prisma.membershipRole.deleteMany({
+        where: {
+          membershipId: targetMembershipId,
+          roleId: role.id,
+          ...(scope ? { scope } : {}),
+          ...(scopeId !== undefined ? { scopeId } : {}),
+        },
       });
       return true;
     } catch (error) {
@@ -206,8 +171,11 @@ export class RoleService {
     user_id: string,
   ) {
     const { roleCode, name, description } = data;
-    const existingRole = await this.prisma.role.findUnique({
-      where: { code: roleCode },
+    const existingRole = await this.prisma.role.findFirst({
+      where: {
+        code: roleCode,
+        OR: [{ clubId }, { isSystem: true }],
+      },
     });
     if (existingRole)
       throw new BadRequestException('Role with same code already exists');
@@ -220,14 +188,6 @@ export class RoleService {
         description,
         isSystem: false,
       },
-    });
-
-    await this.auditLogsService.createLog({
-      category: ENAuditCategory.AUTH,
-      action: 'createRole',
-      entityType: 'Role',
-      metadata: { roleCode, clubId },
-      createdBy: user_id,
     });
 
     return role;
@@ -244,14 +204,6 @@ export class RoleService {
       throw new BadRequestException('Role does not belong to the club');
 
     await this.prisma.role.delete({ where: { id: roleId } });
-
-    await this.auditLogsService.createLog({
-      category: ENAuditCategory.AUTH,
-      action: 'deleteRole',
-      entityType: 'Role',
-      metadata: { roleId, clubId },
-      createdBy: user_id,
-    });
 
     return role;
   }

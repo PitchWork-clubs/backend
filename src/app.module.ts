@@ -13,19 +13,24 @@ import { InvitationModule } from './iam/invitation/invitation.module';
 import { TasksService } from './tasks/tasks.service';
 import { PermissionModule } from './iam/permission/permission.module';
 import { RoleModule } from './iam/role/role.module';
-import { ProfileModule } from './iam/profile/profile.module';
 import { TeamModule } from './teams/team/team.module';
 import { AthleteModule } from './athletes/athlete/athlete.module';
 import { GraphqlModule } from './graphql/graphql.module';
 import { AppResolver } from './app.resolver';
 import { MediaModule } from './media/media.module';
 import { FeatureModule } from './clubs/feature/feature.module';
+import { CryptoModule } from './common/crypto/crypto.module';
+
+import { validateEnv } from './config/env';
 
 @Module({
   imports: [
     TimezoneModule,
     PrismaModule,
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      validate: validateEnv,
+    }),
     ScheduleModule.forRoot(),
     GraphqlModule,
     // IAM modules
@@ -35,7 +40,6 @@ import { FeatureModule } from './clubs/feature/feature.module';
     InvitationModule,
     PermissionModule,
     RoleModule,
-    ProfileModule,
     // Business domain modules
     ClubModule,
     AthleteModule,
@@ -45,6 +49,7 @@ import { FeatureModule } from './clubs/feature/feature.module';
     CommunicationModule,
     MediaModule,
     FeatureModule,
+    CryptoModule,
   ],
   providers: [TasksService, AppResolver],
 })

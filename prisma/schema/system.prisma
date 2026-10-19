@@ -1,53 +1,24 @@
-// we wil need an enum
-enum ENAuditCategory {
-  AUTH
-  IAM
-  CLUB
-  TEAM
-  ATHLETE
-  TRAINING
-  MATCH
-  MEDICAL
-  FINANCE
-  SYSTEM
-  MEMBERSHIP
+enum ENAuditLogResult {
+  SUCCESS
+  DENIED
 }
 
 model AuditLog {
   id          String          @id @default(cuid(2))
-  category    ENAuditCategory
+  category    ENFeature
   action      String
-  entityType  String          @map("entity_type")
+  result      ENAuditLogResult
   description String
+  entityType  String          @map("entity_type")
+  entityId    String          @map("entity_id")
 
   metadata Json?
+  doneById String?  @default("system") @map("created_by")
 
-  createdBy String?  @default("system") @map("created_by")
+  // timestamp
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
+  @@index([createdAt])
+  @@index([entityType, doneById])
   @@map("audit_logs")
-}
-
-enum ENNotificationType {
-  SYSTEM
-  TRAINING
-  MATCH
-}
-
-model Notification {
-  id String @id @default(cuid(2))
-
-  type ENNotificationType @default(SYSTEM)
-
-  title       String @db.VarChar(100)
-  description String @db.VarChar(100)
-
-  createdBy String? @default("system") @map("created_by")
-
-  seenBy  User[] @relation("NotificationSeenBy") // people who marked it as seen
-  sentFor User[] @relation("NotificationSentFor") // people the message is intended to reach
-
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-
-  @@map("notifications")
 }

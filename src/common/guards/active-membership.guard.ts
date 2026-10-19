@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   UnauthorizedException,
@@ -13,13 +14,21 @@ import {
 } from '@prisma/client';
 import { getRequestFromContext } from '@common/utils/request-context.util';
 import { TimezoneService } from '@common/timezone/timezone.service';
+import { AccessContext, IPermissionScope } from './access-context';
 
 export type TActiveMembershipPayload = Prisma.MembershipGetPayload<{
   include: {
-    permissions: { include: { permission: true } };
     club: true;
-    person: { include: { user: true } };
-    roles: {
+    types: true;
+    person: {
+      include: {
+        user: true;
+        relatedPersonLinks: {
+          select: { personId: true };
+        };
+      };
+    };
+    membershipRoles: {
       include: {
         role: {
           include: {
@@ -32,6 +41,11 @@ export type TActiveMembershipPayload = Prisma.MembershipGetPayload<{
         };
       };
     };
+    membershipPermissions: {
+      include: {
+        permission: true;
+      };
+    };
   };
 }>;
 
@@ -40,6 +54,14 @@ declare global {
     interface Request {
       activeMembership?: TActiveMembershipPayload;
       effectivePermissions?: string[];
+      permissionScopes?: Map<string, IPermissionScope[]>;
+      accessContext?: AccessContext;
+      club?: {
+        clubId: string;
+        membershipId: string;
+        personId: string;
+        types: string[];
+      };
       timezone?: string | null;
     }
   }
@@ -52,18 +74,26 @@ export class ActiveMembershipGuard implements CanActivate {
     private readonly timezoneService: TimezoneService,
   ) {}
 
-  async canActivate(context: ExecutionContext) {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = this.getRequest(context);
 
     const personId = req.user?.person_id;
     const userId = req.user?.user_id;
-    if (!personId || !userId)
+    if (!personId || !userId) {
       throw new UnauthorizedException('User session not found.');
+    }
 
-    const clubId = req.headers['x-club-id'] as string;
-    if (!clubId) throw new UnauthorizedException('Club ID not provided.');
+    // Resolve clubId from route param or header
+    const clubId =
+      (req.params?.clubId as string) ||
+      (req.params?.id as string) ||
+      (req.headers['x-club-id'] as string);
 
-    let activeMembership: null | TActiveMembershipPayload = null;
+    if (!clubId) {
+      throw new UnauthorizedException('Club context not identified.');
+    }
+
+    let activeMembership: TActiveMembershipPayload | null = null;
 
     try {
       activeMembership = await this.prisma.membership.findFirst({
@@ -73,10 +103,18 @@ export class ActiveMembershipGuard implements CanActivate {
           status: ENMembershipStatus.ACTIVE,
         },
         include: {
-          permissions: { include: { permission: true } },
           club: true,
-          person: { include: { user: true } },
-          roles: {
+          types: true,
+          person: {
+            include: {
+              user: true,
+              relatedPersonLinks: {
+                where: { clubId, endedAt: null },
+                select: { personId: true },
+              },
+            },
+          },
+          membershipRoles: {
             include: {
               role: {
                 include: {
@@ -89,45 +127,80 @@ export class ActiveMembershipGuard implements CanActivate {
               },
             },
           },
+          membershipPermissions: {
+            include: {
+              permission: true,
+            },
+          },
         },
       });
     } catch (error) {
-      throw new InternalServerErrorException('Validating user failed');
+      throw new InternalServerErrorException('Validating membership failed');
     }
 
-    if (!activeMembership)
-      throw new UnauthorizedException('Active club membership not found.');
+    if (!activeMembership) {
+      throw new ForbiddenException('Active club membership not found.');
+    }
 
+    // Timezone resolution
     const clientTz = req.headers['x-timezone'] as string | undefined;
     req.timezone = this.timezoneService.resolve(
       clientTz,
       activeMembership.club.timezone,
     );
 
-    const rolePermissions = new Set<string>();
-    for (const membershipRole of activeMembership.roles) {
-      for (const rolePerm of membershipRole.role.permissions) {
-        rolePermissions.add(rolePerm.permission.code);
+    // Compute effective permissions with scopes
+    const codeMap = new Map<string, IPermissionScope[]>();
+
+    // 1. Collect permissions from all assigned roles with their scopes
+    for (const mr of activeMembership.membershipRoles) {
+      for (const rp of mr.role.permissions) {
+        const code = rp.permission.code;
+        const currentScopes = codeMap.get(code) || [];
+        currentScopes.push({
+          scope: mr.scope,
+          scopeId: mr.scopeId,
+        });
+        codeMap.set(code, currentScopes);
       }
     }
 
-    const explicitGrants = new Set<string>();
-    const explicitDenies = new Set<string>();
-
-    for (const override of activeMembership.permissions) {
-      if (override.action === ENMembershipPermissionAction.GRANT) {
-        explicitGrants.add(override.permission.code);
-      } else if (override.action === ENMembershipPermissionAction.REVOKE) {
-        explicitDenies.add(override.permission.code);
+    // 2. Apply explicit direct overrides
+    for (const override of activeMembership.membershipPermissions) {
+      const code = override.permission.code;
+      if (override.action === ENMembershipPermissionAction.REVOKE) {
+        // Explicit REVOKE completely strips the permission (REVOKE always wins)
+        codeMap.delete(code);
+      } else if (override.action === ENMembershipPermissionAction.GRANT) {
+        // Explicit GRANT grants at club-wide scope
+        const currentScopes = codeMap.get(code) || [];
+        currentScopes.push({ scope: 'CLUB', scopeId: null });
+        codeMap.set(code, currentScopes);
       }
     }
 
-    const effectivePermissions = Array.from(rolePermissions)
-      .concat(Array.from(explicitGrants))
-      .filter((code) => !explicitDenies.has(code));
+    const effectivePermissions = Array.from(codeMap.keys());
+    const relatedPersonIds =
+      activeMembership.person.relatedPersonLinks?.map((l) => l.personId) || [];
 
-    req.effectivePermissions = effectivePermissions;
+    const accessContext = new AccessContext(
+      activeMembership.clubId,
+      activeMembership.id,
+      activeMembership.personId,
+      codeMap,
+      relatedPersonIds,
+    );
+
     req.activeMembership = activeMembership;
+    req.effectivePermissions = effectivePermissions;
+    req.permissionScopes = codeMap;
+    req.accessContext = accessContext;
+    req.club = {
+      clubId: activeMembership.clubId,
+      membershipId: activeMembership.id,
+      personId: activeMembership.personId,
+      types: activeMembership.types.map((t) => t.type),
+    };
 
     return true;
   }

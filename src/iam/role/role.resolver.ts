@@ -30,7 +30,7 @@ export class RoleResolver {
 
   @Query(() => [MembershipRole], { name: 'myRoles' })
   getMyRoles(@CurrentMembership() currentMembership: TActiveMembershipPayload) {
-    return currentMembership?.roles || [];
+    return currentMembership?.membershipRoles || [];
   }
 
   @Query(() => [Role], { name: 'clubRoles' })
