@@ -10,7 +10,7 @@ ENV DATABASE_URL=postgresql://ci:ci@localhost:5432/pitchwork_ci
 COPY package*.json ./
 COPY prisma ./prisma
 
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 COPY . .
 
