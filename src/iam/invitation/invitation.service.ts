@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
 } from '@nestjs/common';
 import { PrismaService } from '@infrastructure/prisma/prisma.service';
@@ -11,7 +12,12 @@ import {
   ENInvitationStatus,
   ENMembershipStatus,
   ENMembershipType,
+  ENFeature,
+  ENAuditLogResult,
+  ENScopeType,
+  Prisma,
 } from '@prisma/client';
+import { AuditLogsService } from '@infrastructure/audit-logs/audit-logs.service';
 import {
   AcceptInvitationDto,
   InviteUserDto,
@@ -30,9 +36,10 @@ export class InvitationService {
     private readonly communicationService: CommunicationService,
     private readonly configService: ConfigService,
     private readonly timezoneService: TimezoneService,
+    private readonly auditLogsService: AuditLogsService,
   ) {}
 
-  private defaultInvitationTtlMs = 1000 * 60 * 60 * 48; // 48 hours
+  private defaultInvitationTtlMs = 1000 * 60 * 60 * 24 * 7;
 
   /**
    * Generate a CSPRNG token and its HMAC-SHA-256 hash using TOKEN_HASH_SECRET.
@@ -134,7 +141,160 @@ export class InvitationService {
   public async inviteUser(
     inviterMembership: TActiveMembershipPayload,
     inviteData: InviteUserDto,
-  ) {}
+  ) {
+    const email = inviteData.invitee_email?.trim().toLowerCase() || null;
+    const phone = inviteData.invitee_phone?.trim() || null;
+    if (!email && !phone) throw new BadRequestException('An email or phone is required.');
+    if (inviteData.teamId) {
+      const team = await this.prisma.team.findFirst({
+        where: { id: inviteData.teamId, clubId: inviterMembership.clubId },
+      });
+      if (!team) throw new BadRequestException('Team does not belong to this club.');
+    }
 
-  public async acceptInvitation(acceptData: AcceptInvitationDto) {}
+    const { token, hash } = this.giveTokenAndHash();
+    const invitation = await this.prisma.invitation.create({
+      data: {
+        email,
+        phone,
+        tokenHash: hash,
+        type: inviteData.type,
+        teamId: inviteData.teamId,
+        inviterId: inviterMembership.id,
+        expiresAt: new Date(Date.now() + this.defaultInvitationTtlMs),
+      },
+    });
+
+    const appUrl = this.configService.get<string>('APP_URL') ?? 'http://localhost:3000';
+    const inviteUrl = `${appUrl}/api/invitations/preview?token=${encodeURIComponent(token)}`;
+    const inviterName = `${inviterMembership.person.firstName} ${inviterMembership.person.lastName}`;
+    const teamName = inviteData.teamId
+      ? (await this.prisma.team.findUnique({ where: { id: inviteData.teamId }, select: { name: true } }))?.name ?? null
+      : null;
+    const text = `You are invited to join ${inviterMembership.club.name} on Pitchwork. Invitation code: ${token}. Open ${inviteUrl}`;
+    if (email) {
+      await this.communicationService.sendEmail(
+        email,
+        `Invitation to join ${inviterMembership.club.name}`,
+        text,
+        this.inviteUserHtmlBody(inviterName, inviterMembership.club.name, inviteUrl, token, inviteData.type, teamName),
+      );
+    }
+    if (phone) await this.communicationService.sendSms(phone, text);
+
+    await this.auditLogsService.createLog({
+      category: ENFeature.ACCESS,
+      action: 'INVITATION_SENT',
+      entityType: 'Invitation',
+      entityId: invitation.id,
+      doneById: inviterMembership.person.user?.id,
+      metadata: { type: inviteData.type, hasEmail: !!email, hasPhone: !!phone },
+    });
+    return { message: 'Invitation instructions sent.' };
+  }
+
+  public async previewInvitation(token: string) {
+    const invitation = await this.findValidInvitation(token);
+    return {
+      clubName: invitation.inviter.club.name,
+      type: invitation.type,
+      expiresAt: invitation.expiresAt,
+      recipient: invitation.email ? this.maskEmail(invitation.email) : this.maskPhone(invitation.phone!),
+    };
+  }
+
+  public async acceptInvitation(userId: string, acceptData: AcceptInvitationDto) {
+    const invitation = await this.findValidInvitation(acceptData.token);
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { identifiers: true },
+    });
+    if (!user) throw new ForbiddenException('User session not found.');
+    const matches = user.identifiers.some((identifier) =>
+      !!identifier.verifiedAt &&
+      ((invitation.email && identifier.type === 'EMAIL' && identifier.value.toLowerCase() === invitation.email) ||
+        (invitation.phone && identifier.type === 'PHONE' && identifier.value === invitation.phone)),
+    );
+    if (!matches) throw new ForbiddenException('This invitation is not addressed to this account.');
+
+    const roleMap: Record<ENMembershipType, { code: string; scope: ENScopeType }> = {
+      OWNER: { code: 'ADMIN', scope: ENScopeType.CLUB },
+      STAFF: { code: 'STAFF', scope: invitation.teamId ? ENScopeType.TEAM : ENScopeType.CLUB },
+      BOARD: { code: 'BOARD', scope: ENScopeType.CLUB },
+      ATHLETE: { code: 'ATHLETE', scope: ENScopeType.OWN },
+      GUARDIAN: { code: 'GUARDIAN', scope: ENScopeType.RELATED },
+      AGENT: { code: 'AGENT', scope: ENScopeType.RELATED },
+    };
+    const roleDefinition = roleMap[invitation.type];
+    const now = this.timezoneService.nowUtc();
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const existing = await tx.membership.findUnique({
+          where: { personId_clubId: { personId: user.personId, clubId: invitation.inviter.clubId } },
+        });
+        if (existing) throw new ConflictException('This account already belongs to this club.');
+        const membership = await tx.membership.create({
+          data: {
+            personId: user.personId,
+            clubId: invitation.inviter.clubId,
+            joinedAt: now,
+            types: { create: { type: invitation.type } },
+          },
+        });
+        let role = await tx.role.findFirst({ where: { code: roleDefinition.code, OR: [{ clubId: null }, { clubId: invitation.inviter.clubId }] } });
+        if (!role) {
+          role = await tx.role.create({
+            data: { code: roleDefinition.code, name: roleDefinition.code, description: `${roleDefinition.code} club role`, isSystem: true, clubId: null },
+          });
+        }
+        await tx.membershipRole.create({
+          data: {
+            membershipId: membership.id,
+            roleId: role.id,
+            scope: roleDefinition.scope,
+            scopeId: roleDefinition.scope === ENScopeType.TEAM ? invitation.teamId : null,
+            assignedById: invitation.inviterId,
+          },
+        });
+        if (invitation.type === ENMembershipType.ATHLETE) {
+          await tx.athlete.create({ data: { membershipId: membership.id, clubId: invitation.inviter.clubId } });
+        }
+        await tx.invitation.update({ where: { id: invitation.id }, data: { acceptedAt: now } });
+        await this.auditLogsService.createLog({
+          category: ENFeature.ACCESS,
+          action: 'INVITATION_ACCEPTED',
+          entityType: 'Invitation',
+          entityId: invitation.id,
+          doneById: userId,
+          metadata: { membershipId: membership.id, clubId: invitation.inviter.clubId, type: invitation.type },
+        }, tx);
+        return { membershipId: membership.id, clubId: invitation.inviter.clubId, type: invitation.type };
+      });
+    } catch (error) {
+      if (error instanceof ConflictException) throw error;
+      throw new BadRequestException('Unable to accept invitation.');
+    }
+  }
+
+  private async findValidInvitation(token: string) {
+    const secret = this.configService.getOrThrow<string>('TOKEN_HASH_SECRET');
+    const tokenHash = computeTokenHash(secret, token.trim());
+    const invitation = await this.prisma.invitation.findUnique({
+      where: { tokenHash },
+      include: { inviter: { include: { club: true } } },
+    });
+    if (!invitation || invitation.status !== ENInvitationStatus.PENDING || invitation.acceptedAt || invitation.expiresAt <= new Date()) {
+      throw new BadRequestException('Invalid or expired invitation.');
+    }
+    return invitation;
+  }
+
+  private maskEmail(email: string) {
+    const [local, domain] = email.split('@');
+    return `${local.slice(0, 1)}${'*'.repeat(Math.max(1, local.length - 1))}@${domain}`;
+  }
+
+  private maskPhone(phone: string) {
+    return `${'*'.repeat(Math.max(0, phone.length - 4))}${phone.slice(-4)}`;
+  }
 }

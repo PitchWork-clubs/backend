@@ -5,7 +5,9 @@ import { Expose, Transform } from 'class-transformer';
 import {
   IsEmail,
   IsEnum,
+  IsPhoneNumber,
   IsNotEmpty,
+  IsOptional,
   IsString,
   MinLength,
   ValidateIf,
@@ -28,11 +30,19 @@ export { AcceptInvitationInput as AcceptInvitationDto };
 
 @InputType()
 export class InviteUserInput {
-  @Field(() => String)
+  @Field(() => String, { nullable: true })
   @Transform(({ value }) => value?.trim().toLowerCase())
+  @ValidateIf((o) => !o.invitee_phone)
   @IsEmail()
-  @IsNotEmpty()
+  @IsOptional()
   invitee_email!: string;
+
+  @Field(() => String, { nullable: true })
+  @Transform(({ value }) => value?.trim())
+  @ValidateIf((o) => !o.invitee_email)
+  @IsPhoneNumber(undefined, { message: 'Invalid phone number' })
+  @IsOptional()
+  invitee_phone?: string;
 
   @Field(() => GqlENMembershipType)
   @IsEnum(ENMembershipType)
