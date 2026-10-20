@@ -11,6 +11,7 @@ import {
   ValidateIf,
   IsPhoneNumber,
   IsOptional,
+  Matches,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { PhoneNumberFormat, PhoneNumberUtil } from 'google-libphonenumber';
@@ -38,11 +39,15 @@ function normalizePhone(value: unknown): unknown {
 }
 
 export class RegisteringPersonDto {
-  @Transform(({ value }: { value: string | undefined }) => value?.trim().toLowerCase())
+  @Transform(({ value }: { value: string | undefined }) =>
+    value?.trim().toLowerCase(),
+  )
   @IsString()
   firstName!: string;
 
-  @Transform(({ value }: { value: string | undefined  }) => value?.trim().toLowerCase())
+  @Transform(({ value }: { value: string | undefined }) =>
+    value?.trim().toLowerCase(),
+  )
   @IsString()
   lastName!: string;
 
@@ -54,8 +59,10 @@ export class RegisteringPersonDto {
   dob!: Date;
 
   @IsString()
-  @Transform(({ value }: { value: string | undefined  }) => value?.trim().toLowerCase())
-  @Transform(({ value }: { value: string | undefined  }) => {
+  @Transform(({ value }: { value: string | undefined }) =>
+    value?.trim().toLowerCase(),
+  )
+  @Transform(({ value }: { value: string | undefined }) => {
     if (typeof value !== 'string') return value;
 
     const nationalityCode = nationalities.getAlpha2Code(value, 'en');
@@ -74,13 +81,13 @@ export class RegisteringPersonDto {
 }
 
 export class RegisterUserDto {
-  @ValidateIf(o => !o.phone || o.email)
+  @ValidateIf((o) => !o.phone || o.email)
   @Transform(({ value }: { value: string }) => value?.trim().toLowerCase())
   @IsString()
   @IsEmail()
   email?: string;
 
-  @ValidateIf(o => !o.email || o.phone)
+  @ValidateIf((o) => !o.email || o.phone)
   @Transform(({ value }: { value: string }) => normalizePhone(value))
   @IsString()
   @IsPhoneNumber(undefined, { message: 'Invalid Phone Number' })
@@ -101,4 +108,138 @@ export class RegisterUserPersonDto extends IntersectionType(
   RegisterUserDto,
 ) {}
 
-export class LoginDto extends RegisterUserDto {}
+export class LoginDto {
+  @ValidateIf((value) => !value.phone || value.email)
+  @IsOptional()
+  @Transform(({ value }: { value: string | undefined }) =>
+    value?.trim().toLowerCase(),
+  )
+  @IsEmail()
+  email?: string;
+
+  @ValidateIf((value) => !value.email || value.phone)
+  @IsOptional()
+  @Transform(({ value }: { value: string | undefined }) =>
+    normalizePhone(value),
+  )
+  @IsPhoneNumber(undefined, { message: 'Invalid Phone Number' })
+  phone?: string;
+
+  @IsString()
+  @MinLength(5)
+  password!: string;
+}
+
+export class VerifyIdentifierDto {
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsString()
+  token?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (trimmed.includes('@')) return trimmed.toLowerCase();
+    return normalizePhone(trimmed);
+  })
+  @IsString()
+  identifier?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim().toUpperCase() : value,
+  )
+  @IsString()
+  code?: string;
+}
+
+export class ResendVerificationDto {
+  @Transform(({ value }: { value: unknown }) => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (trimmed.includes('@')) return trimmed.toLowerCase();
+    return normalizePhone(trimmed);
+  })
+  @IsString()
+  identifier!: string;
+}
+
+export class RefreshTokenDto {
+  @IsOptional()
+  @IsString()
+  refreshToken?: string;
+}
+
+export class PasswordForgotDto {
+  @IsOptional()
+  @Transform(({ value }: { value: string | undefined }) =>
+    value?.trim().toLowerCase(),
+  )
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: string | undefined }) =>
+    normalizePhone(value),
+  )
+  @IsPhoneNumber(undefined, { message: 'Invalid Phone Number' })
+  phone?: string;
+}
+
+export class PasswordResetDto {
+  @IsOptional()
+  @Transform(({ value }: { value: string | undefined }) =>
+    value?.trim().toLowerCase(),
+  )
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @Transform(({ value }: { value: string | undefined }) =>
+    normalizePhone(value),
+  )
+  @IsPhoneNumber(undefined, { message: 'Invalid Phone Number' })
+  phone?: string;
+
+  @IsString()
+  @MinLength(5)
+  newPassword!: string;
+
+  @IsString()
+  @MinLength(6)
+  token!: string;
+}
+
+export class ChangePasswordDto {
+  @IsString()
+  @MinLength(5)
+  currentPassword!: string;
+
+  @IsString()
+  @MinLength(5)
+  newPassword!: string;
+}
+
+export class TwoFactorCodeDto {
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'Code must be 6 digits' })
+  code!: string;
+}
+
+export class TwoFactorLoginDto {
+  @IsString()
+  @MinLength(6)
+  code!: string;
+
+  @IsString()
+  challengeToken!: string;
+}
+
+export class DisableTwoFactorDto extends TwoFactorCodeDto {
+  @IsString()
+  @MinLength(5)
+  password!: string;
+}

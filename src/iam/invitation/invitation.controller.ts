@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import { InvitationService } from './invitation.service';
 import {
   AcceptInvitationDto,
@@ -12,13 +12,13 @@ import {
 } from '@common/guards/active-membership.guard';
 import { PermissionsGuard } from '@common/guards/permissions.guard';
 import { RequirePermissions } from '@common/decorators/require-permissions.decorator';
-import { CurrentMembership } from '@common/decorators/current-user';
+import { CurrentMembership, CurrentUser } from '@common/decorators/current-user';
 
-@Controller('invitation')
+@Controller()
 export class InvitationController {
   constructor(private readonly invitationService: InvitationService) {}
 
-  @Post('send')
+  @Post(['invitation/send', 'clubs/:clubId/invitations'])
   @UseGuards(
     PassportJwtGuard,
     EmailVerifiedGuard,
@@ -33,8 +33,17 @@ export class InvitationController {
     return this.invitationService.inviteUser(activeMembership, inviteData);
   }
 
-  @Post('accept')
-  async acceptInvitation(@Body() acceptData: AcceptInvitationDto) {
-    return this.invitationService.acceptInvitation(acceptData);
+  @Get('invitations/preview')
+  async previewInvitation(@Query('token') token: string) {
+    return this.invitationService.previewInvitation(token);
+  }
+
+  @Post('invitations/accept')
+  @UseGuards(PassportJwtGuard)
+  async acceptInvitation(
+    @CurrentUser() user: { user_id: string },
+    @Body() acceptData: AcceptInvitationDto,
+  ) {
+    return this.invitationService.acceptInvitation(user.user_id, acceptData);
   }
 }

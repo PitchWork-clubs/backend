@@ -1,6 +1,7 @@
 export type TPayload = {
   sub: string;
   person_id: string;
+  sid?: string;
 };
 
 export type TRegistrationResult = {
