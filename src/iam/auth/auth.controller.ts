@@ -15,10 +15,16 @@ import {
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import {
+  ChangePasswordDto,
+  DisableTwoFactorDto,
   LoginDto,
+  PasswordForgotDto,
+  PasswordResetDto,
   RegisterUserPersonDto,
   RefreshTokenDto,
   ResendVerificationDto,
+  TwoFactorCodeDto,
+  TwoFactorLoginDto,
   VerifyIdentifierDto,
 } from './auth.dto';
 import { Request, Response } from 'express';
@@ -27,8 +33,6 @@ import { CurrentUser } from '@common/decorators/current-user';
 import { TPayload, TUserData } from './auth.types';
 import { UserTokenService } from '../user-token/user-token.service';
 import {
-  ForgotPasswordDto,
-  ResetPasswordDto,
   SendVerifyEmailDto,
   VerifyEmailDto,
 } from '../user-token/user-token.dto';
@@ -239,12 +243,80 @@ export class AuthController {
   }
 
   @Post('password/forgot')
-  public async forgotPassword(@Body() data: ForgotPasswordDto) {
-    return await this.userTokenService.forgotPassword(data.email);
+  public async forgotPassword(@Body() data: PasswordForgotDto) {
+    return await this.authService.forgotPassword(data);
   }
 
   @Put('password/reset')
-  public async resetPassword(@Body() data: ResetPasswordDto) {
-    return await this.userTokenService.resetPassword(data);
+  public async resetPassword(@Body() data: PasswordResetDto) {
+    return await this.authService.resetPassword(data);
+  }
+
+  @Post('password/change')
+  @UseGuards(PassportJwtGuard)
+  public async changePassword(
+    @CurrentUser() user: { user_id: string; sid?: string },
+    @Body() data: ChangePasswordDto,
+  ) {
+    return this.authService.changePassword(user.user_id, user.sid, data);
+  }
+
+  @Post('2fa/setup')
+  @UseGuards(PassportJwtGuard)
+  public async setupTwoFactor(@CurrentUser() user: { user_id: string }) {
+    return this.authService.setupTwoFactor(user.user_id);
+  }
+
+  @Post('2fa/enable')
+  @UseGuards(PassportJwtGuard)
+  public async enableTwoFactor(
+    @CurrentUser() user: { user_id: string },
+    @Body() data: TwoFactorCodeDto,
+  ) {
+    return this.authService.enableTwoFactor(user.user_id, data);
+  }
+
+  @Post('login/2fa')
+  public async loginTwoFactor(
+    @Body() data: TwoFactorLoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.finishTwoFactorLogin(
+      data.challengeToken,
+      data,
+      { ip: req.ip, userAgent: req.get('user-agent') },
+    );
+    const isMobile = req.header('x-client-type')?.toLowerCase() === 'mobile';
+    if (!isMobile) {
+      res.cookie('accessToken', result.accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 15 * 60_000,
+      });
+      res.cookie('refresh_token', result.refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/api/auth',
+        maxAge: 30 * 24 * 60 * 60_000,
+      });
+    }
+    return {
+      message: 'Logged in Successfully',
+      user: result.user,
+      accessToken: isMobile ? result.accessToken : undefined,
+      refreshToken: isMobile ? result.refreshToken : undefined,
+    };
+  }
+
+  @Post('2fa/disable')
+  @UseGuards(PassportJwtGuard)
+  public async disableTwoFactor(
+    @CurrentUser() user: { user_id: string },
+    @Body() data: DisableTwoFactorDto,
+  ) {
+    return this.authService.disableTwoFactor(user.user_id, data);
   }
 }

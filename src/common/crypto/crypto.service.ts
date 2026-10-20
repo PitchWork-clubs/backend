@@ -73,10 +73,7 @@ export class CryptoService {
   }
 
   /** Generate 6-digit OTP and its HMAC hash (bound to userId and type if provided) */
-  generateOtp(
-    userId?: string,
-    type?: string,
-  ): { otp: string; hash: string } {
+  generateOtp(userId?: string, type?: string): { otp: string; hash: string } {
     // 6-digit numeric OTP (e.g. "123456") using the OS CSPRNG.
     const num = randomInt(100000, 1000000).toString();
     const hashKey = userId && type ? `otp:${userId}:${type}:${num}` : num;
@@ -120,5 +117,67 @@ export class CryptoService {
     const bufB = Buffer.from(b);
     if (bufA.length !== bufB.length) return false;
     return timingSafeEqual(bufA, bufB);
+  }
+
+  generateTotpSecret(): string {
+    const bytes = randomBytes(20);
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    let output = '';
+    let buffer = 0;
+    let bits = 0;
+    for (const byte of bytes) {
+      buffer = (buffer << 8) | byte;
+      bits += 8;
+      while (bits >= 5) {
+        output += alphabet[(buffer >>> (bits - 5)) & 31];
+        bits -= 5;
+      }
+    }
+    if (bits > 0) output += alphabet[(buffer << (5 - bits)) & 31];
+    return output;
+  }
+
+  createTotpUri(secret: string, account: string, issuer = 'Pitchwork'): string {
+    return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(account)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
+  }
+
+  verifyTotp(secret: string, code: string, timestamp = Date.now()): boolean {
+    const normalized = code.trim().replace(/\s/g, '');
+    if (!/^\d{6}$/.test(normalized)) return false;
+    const counter = Math.floor(timestamp / 30_000);
+    return [-1, 0, 1].some(
+      (offset) => this.totpCode(secret, counter + offset) === normalized,
+    );
+  }
+
+  private totpCode(secret: string, counter: number): string {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+    const normalized = secret.replace(/=+$/, '').toUpperCase();
+    let buffer = 0;
+    let bits = 0;
+    const decoded: number[] = [];
+    for (const char of normalized) {
+      const value = alphabet.indexOf(char);
+      if (value < 0) return '';
+      buffer = (buffer << 5) | value;
+      bits += 5;
+      if (bits >= 8) {
+        decoded.push((buffer >>> (bits - 8)) & 255);
+        bits -= 8;
+      }
+    }
+    const secretBytes = Buffer.from(decoded);
+    const counterBytes = Buffer.alloc(8);
+    counterBytes.writeBigUInt64BE(BigInt(counter));
+    const digest = createHmac('sha1', secretBytes)
+      .update(counterBytes)
+      .digest();
+    const offset = digest[digest.length - 1] & 0x0f;
+    const binary =
+      ((digest[offset] & 0x7f) << 24) |
+      (digest[offset + 1] << 16) |
+      (digest[offset + 2] << 8) |
+      digest[offset + 3];
+    return String(binary % 1_000_000).padStart(6, '0');
   }
 }

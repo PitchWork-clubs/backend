@@ -9,9 +9,14 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '@infrastructure/prisma/prisma.service';
 import {
+  ChangePasswordDto,
+  DisableTwoFactorDto,
   LoginDto,
+  PasswordForgotDto,
+  PasswordResetDto,
   RegisterUserPersonDto,
   ResendVerificationDto,
+  TwoFactorCodeDto,
   VerifyIdentifierDto,
 } from './auth.dto';
 import * as argon2 from 'argon2';
@@ -33,7 +38,9 @@ import { TimezoneService } from '@common/timezone/timezone.service';
 import { ConfigService } from '@nestjs/config';
 import { CommunicationService } from '@infrastructure/communication/communication.service';
 import { AuditLogsService } from '@infrastructure/audit-logs/audit-logs.service';
+import { CryptoService } from '@common/crypto/crypto.service';
 import { burnPasswordCheck, verifyPassword } from '@common/utils/password.util';
+import { hashPassword } from '@common/utils/password.util';
 import { randomBytes } from 'node:crypto';
 import {
   generateApplicationToken,
@@ -54,6 +61,7 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly communicationService: CommunicationService,
     private readonly auditLogsService: AuditLogsService,
+    private readonly cryptoService: CryptoService,
   ) {}
 
   public returnSanitizedUserData(user: TUserWithPerson): TUserData {
@@ -833,6 +841,366 @@ export class AuthService {
       throw new ResourceNotFoundException('Session not found', 'Session');
     }
     return { message: 'Session revoked successfully' };
+  }
+
+  private readonly passwordFlowResponse = {
+    message:
+      'If the account is eligible, password reset instructions will be sent.',
+  };
+
+  private getIdentifierInput(dto: { email?: string; phone?: string }) {
+    if (dto.email)
+      return {
+        type: ENIdentifierType.EMAIL,
+        value: dto.email.trim().toLowerCase(),
+      };
+    if (dto.phone)
+      return { type: ENIdentifierType.PHONE, value: dto.phone.trim() };
+    return undefined;
+  }
+
+  private async sendPasswordResetEmail(
+    email: string,
+    firstName: string,
+    token: string,
+  ) {
+    const appUrl = this.configService.getOrThrow<string>('APP_URL');
+    const link = `${appUrl}/api/auth/password/reset?token=${encodeURIComponent(token)}`;
+    await this.communicationService.sendEmail(
+      email,
+      'Reset your Pitchwork password',
+      `Hello ${firstName},\n\nUse this link to reset your Pitchwork password:\n${link}\n\nThis link expires in 30 minutes.`,
+      `<p>Hello ${firstName},</p><p><a href="${link}">Reset your Pitchwork password</a></p><p>This link expires in 30 minutes.</p>`,
+    );
+  }
+
+  public async forgotPassword(dto: PasswordForgotDto) {
+    const input = this.getIdentifierInput(dto);
+    if (!input) return this.passwordFlowResponse;
+    const now = this.timezoneService.nowUtc();
+    const secret = this.configService.getOrThrow<string>('TOKEN_HASH_SECRET');
+    let delivery:
+      | {
+          type: ENIdentifierType;
+          value: string;
+          firstName: string;
+          token: string;
+        }
+      | undefined;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const identifier = await tx.userIdentifier.findUnique({
+        where: { type_value: input },
+        include: { user: { include: { person: true } } },
+      });
+      if (
+        !identifier ||
+        !identifier.verifiedAt ||
+        !identifier.user.passwordHash
+      )
+        return false;
+      const latest = await tx.userToken.findFirst({
+        where: {
+          identifierId: identifier.id,
+          type: ENUserTokenType.CHANGE_PASSWORD,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (latest && now.getTime() - latest.createdAt.getTime() < 60_000)
+        return false;
+      const generated =
+        identifier.type === ENIdentifierType.EMAIL
+          ? generateApplicationToken(secret)
+          : generateOtp(secret);
+      const rawToken = 'token' in generated ? generated.token : generated.otp;
+      await tx.userToken.updateMany({
+        where: {
+          identifierId: identifier.id,
+          type: ENUserTokenType.CHANGE_PASSWORD,
+          status: 'PENDING',
+        },
+        data: { status: 'DISRUPTED' },
+      });
+      await tx.userToken.create({
+        data: {
+          type: ENUserTokenType.CHANGE_PASSWORD,
+          hash: generated.hash,
+          userId: identifier.userId,
+          identifierId: identifier.id,
+          expiresAt: new Date(
+            now.getTime() +
+              (identifier.type === ENIdentifierType.EMAIL ? 30 : 10) * 60_000,
+          ),
+        },
+      });
+      delivery = {
+        type: identifier.type,
+        value: identifier.value,
+        firstName: identifier.user.person.firstName,
+        token: rawToken,
+      };
+      return true;
+    });
+
+    if (created && delivery) {
+      if (delivery.type === ENIdentifierType.EMAIL) {
+        await this.sendPasswordResetEmail(
+          delivery.value,
+          delivery.firstName,
+          delivery.token,
+        );
+      } else {
+        await this.communicationService.sendSms(
+          delivery.value,
+          `Your Pitchwork password reset code is ${delivery.token}. It expires in 10 minutes.`,
+        );
+      }
+    }
+    return this.passwordFlowResponse;
+  }
+
+  public async resetPassword(dto: PasswordResetDto) {
+    const input = this.getIdentifierInput(dto);
+    const secret = this.configService.getOrThrow<string>('TOKEN_HASH_SECRET');
+    let token: any;
+    if (input) {
+      const identifier = await this.prisma.userIdentifier.findUnique({
+        where: { type_value: input },
+      });
+      if (identifier) {
+        token = await this.prisma.userToken.findFirst({
+          where: {
+            identifierId: identifier.id,
+            type: ENUserTokenType.CHANGE_PASSWORD,
+            status: 'PENDING',
+            usedAt: null,
+          },
+          orderBy: { createdAt: 'desc' },
+          include: { identifier: true },
+        });
+      }
+      if (token) {
+        await this.prisma.userToken.updateMany({
+          where: { id: token.id, status: 'PENDING', usedAt: null },
+          data: { attempts: { increment: 1 } },
+        });
+        token.attempts += 1;
+      }
+    } else {
+      token = await this.prisma.userToken.findUnique({
+        where: { hash: computeTokenHash(secret, dto.token) },
+        include: { identifier: true },
+      });
+    }
+
+    const valid =
+      token &&
+      token.type === ENUserTokenType.CHANGE_PASSWORD &&
+      token.status === 'PENDING' &&
+      !token.usedAt &&
+      token.expiresAt > new Date() &&
+      token.attempts <= 5 &&
+      computeTokenHash(secret, dto.token) === token.hash;
+    if (!valid) {
+      if (token && token.attempts >= 5) {
+        await this.prisma.userToken.updateMany({
+          where: { id: token.id, status: 'PENDING', usedAt: null },
+          data: { status: 'DISRUPTED' },
+        });
+      }
+      throw new BadRequestException('Invalid or expired code');
+    }
+
+    const now = this.timezoneService.nowUtc();
+    const passwordHash = await hashPassword(dto.newPassword);
+    const completed = await this.prisma.$transaction(async (tx) => {
+      const consumed = await tx.userToken.updateMany({
+        where: {
+          id: token.id,
+          status: 'PENDING',
+          usedAt: null,
+          expiresAt: { gt: now },
+          attempts: { lt: 6 },
+        },
+        data: { usedAt: now },
+      });
+      if (consumed.count !== 1) return false;
+      await tx.user.update({
+        where: { id: token.userId },
+        data: { passwordHash, failedLoginAttempts: 0, lockedUntil: null },
+      });
+      await tx.session.updateMany({
+        where: { userId: token.userId, revokedAt: null },
+        data: { revokedAt: now },
+      });
+      return true;
+    });
+    if (!completed) throw new BadRequestException('Invalid or expired code');
+    await this.auditLogsService.createLog({
+      category: ENFeature.ACCESS,
+      action: 'PASSWORD_RESET',
+      entityType: 'User',
+      entityId: token.userId,
+      doneById: token.userId,
+    });
+    return { message: 'Password reset successfully' };
+  }
+
+  public async changePassword(
+    userId: string,
+    sessionId: string | undefined,
+    dto: ChangePasswordDto,
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (
+      !user?.passwordHash ||
+      !(await verifyPassword(user.passwordHash, dto.currentPassword))
+    ) {
+      throw new UnauthorizedException('Invalid current password');
+    }
+    if (await verifyPassword(user.passwordHash, dto.newPassword)) {
+      throw new BadRequestException('New password must be different');
+    }
+    const passwordHash = await hashPassword(dto.newPassword);
+    const now = this.timezoneService.nowUtc();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { passwordHash, failedLoginAttempts: 0, lockedUntil: null },
+      });
+      await tx.session.updateMany({
+        where: {
+          userId,
+          ...(sessionId ? { id: { not: sessionId } } : {}),
+          revokedAt: null,
+        },
+        data: { revokedAt: now },
+      });
+    });
+    await this.auditLogsService.createLog({
+      category: ENFeature.ACCESS,
+      action: 'PASSWORD_CHANGED',
+      entityType: 'User',
+      entityId: userId,
+      doneById: userId,
+    });
+    return { message: 'Password changed successfully' };
+  }
+
+  public async setupTwoFactor(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { identifiers: true },
+    });
+    if (!user) throw new ResourceNotFoundException('User not found', 'User');
+    if (user.isTwoFactorEnabled)
+      throw new BadRequestException(
+        'Two-factor authentication is already enabled',
+      );
+    const account =
+      user.identifiers.find((item) => item.type === ENIdentifierType.EMAIL)
+        ?.value ?? user.id;
+    const secret = this.cryptoService.generateTotpSecret();
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { twoFactorSecret: this.cryptoService.encrypt(secret) },
+    });
+    return {
+      secret,
+      otpauthUrl: this.cryptoService.createTotpUri(secret, account),
+    };
+  }
+
+  private async getTwoFactorSecret(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { person: true },
+    });
+    if (!user?.twoFactorSecret)
+      throw new BadRequestException(
+        'Two-factor authentication is not configured',
+      );
+    return { user, secret: this.cryptoService.decrypt(user.twoFactorSecret) };
+  }
+
+  public async enableTwoFactor(userId: string, dto: TwoFactorCodeDto) {
+    const { secret } = await this.getTwoFactorSecret(userId);
+    if (!this.cryptoService.verifyTotp(secret, dto.code))
+      throw new BadRequestException('Invalid authentication code');
+    const { plainCodes, hashedCodes } =
+      this.cryptoService.generateRecoveryCodes(userId);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { isTwoFactorEnabled: true },
+      });
+      await tx.recoveryCode.deleteMany({ where: { userId } });
+      await tx.recoveryCode.createMany({
+        data: hashedCodes.map((codeHash) => ({ userId, codeHash })),
+      });
+    });
+    return {
+      message: 'Two-factor authentication enabled',
+      recoveryCodes: plainCodes,
+    };
+  }
+
+  public async finishTwoFactorLogin(
+    challengeToken: string,
+    dto: TwoFactorCodeDto,
+    request?: { ip?: string; userAgent?: string },
+  ) {
+    let payload: { sub: string; person_id: string };
+    try {
+      payload = await this.jwtService.verifyAsync(challengeToken, {
+        audience: '2fa-challenge',
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid two-factor challenge');
+    }
+    const { user, secret } = await this.getTwoFactorSecret(payload.sub);
+    let verified =
+      user.isTwoFactorEnabled &&
+      this.cryptoService.verifyTotp(secret, dto.code);
+    if (!verified && user.isTwoFactorEnabled) {
+      const recoveryHash = this.cryptoService.hashRecoveryCode(
+        user.id,
+        dto.code,
+      );
+      const recoveryCode = await this.prisma.recoveryCode.findFirst({
+        where: { userId: user.id, codeHash: recoveryHash, usedAt: null },
+      });
+      if (recoveryCode) {
+        const consumed = await this.prisma.recoveryCode.updateMany({
+          where: { id: recoveryCode.id, usedAt: null },
+          data: { usedAt: this.timezoneService.nowUtc() },
+        });
+        verified = consumed.count === 1;
+      }
+    }
+    if (!verified) {
+      throw new UnauthorizedException('Invalid authentication code');
+    }
+    return this.issueSession(user as TUserWithPerson, '2fa', request);
+  }
+
+  public async disableTwoFactor(userId: string, dto: DisableTwoFactorDto) {
+    const { user, secret } = await this.getTwoFactorSecret(userId);
+    if (
+      !user.passwordHash ||
+      !(await verifyPassword(user.passwordHash, dto.password)) ||
+      !this.cryptoService.verifyTotp(secret, dto.code)
+    ) {
+      throw new UnauthorizedException('Invalid authentication credentials');
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { isTwoFactorEnabled: false, twoFactorSecret: null },
+      });
+      await tx.recoveryCode.deleteMany({ where: { userId } });
+    });
+    return { message: 'Two-factor authentication disabled' };
   }
 
   private async updateLastLogin(user: User) {
