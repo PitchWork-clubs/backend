@@ -1,6 +1,9 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -14,6 +17,8 @@ import {
 import * as argon2 from 'argon2';
 import {
   ENIdentifierType,
+  ENAuditLogResult,
+  ENFeature,
   ENInvitationStatus,
   ENUserTokenType,
   Prisma,
@@ -27,6 +32,9 @@ import { ResourceNotFoundException } from '@common/exceptions/resource-not-found
 import { TimezoneService } from '@common/timezone/timezone.service';
 import { ConfigService } from '@nestjs/config';
 import { CommunicationService } from '@infrastructure/communication/communication.service';
+import { AuditLogsService } from '@infrastructure/audit-logs/audit-logs.service';
+import { burnPasswordCheck, verifyPassword } from '@common/utils/password.util';
+import { randomBytes } from 'node:crypto';
 import {
   generateApplicationToken,
   generateOtp,
@@ -45,6 +53,7 @@ export class AuthService {
     private readonly timezoneService: TimezoneService,
     private readonly configService: ConfigService,
     private readonly communicationService: CommunicationService,
+    private readonly auditLogsService: AuditLogsService,
   ) {}
 
   public returnSanitizedUserData(user: TUserWithPerson): TUserData {
@@ -505,16 +514,325 @@ export class AuthService {
     return this.returnSanitizedUserData(user);
   }
 
-  public async validateCredentials(loginDto: LoginDto) {
-    try {
-    } catch (error) {
-      // If it's already an UnauthorizedException, rethrow it
-      if (error instanceof UnauthorizedException) {
-        throw error;
+  public async validateCredentials(
+    loginDto: LoginDto,
+    request?: { ip?: string; userAgent?: string },
+  ) {
+    const identifierValue =
+      loginDto.email?.trim().toLowerCase() ?? loginDto.phone?.trim();
+    const identifierType = loginDto.email
+      ? ENIdentifierType.EMAIL
+      : ENIdentifierType.PHONE;
+    const invalidCredentials = async (userId?: string) => {
+      await this.auditLogsService.createLog({
+        category: ENFeature.ACCESS,
+        action: 'LOGIN_FAILED',
+        entityType: 'User',
+        entityId: userId,
+        result: ENAuditLogResult.DENIED,
+        metadata: { identifier: identifierValue },
+      });
+      throw new UnauthorizedException('Invalid credentials');
+    };
+
+    if (!identifierValue) {
+      await burnPasswordCheck(loginDto.password);
+      return invalidCredentials();
+    }
+
+    const identifier = await this.prisma.userIdentifier.findUnique({
+      where: {
+        type_value: { type: identifierType, value: identifierValue },
+      },
+      include: { user: { include: { person: true } } },
+    });
+    const user = identifier?.user;
+
+    if (!user || user.isDeleted || !user.passwordHash) {
+      await burnPasswordCheck(loginDto.password);
+      return invalidCredentials(user?.id);
+    }
+
+    const now = this.timezoneService.nowUtc();
+    if (user.lockedUntil && user.lockedUntil > now) {
+      throw new HttpException(
+        'Too many attempts, try again later',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const passwordMatches = await verifyPassword(
+      user.passwordHash,
+      loginDto.password,
+    );
+    if (!passwordMatches) {
+      const nextAttempts = user.failedLoginAttempts + 1;
+      const lockedUntil =
+        nextAttempts >= 5 ? new Date(now.getTime() + 15 * 60_000) : null;
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          failedLoginAttempts: nextAttempts >= 5 ? 0 : nextAttempts,
+          lockedUntil,
+        },
+      });
+      await this.auditLogsService.createLog({
+        category: ENFeature.ACCESS,
+        action: 'LOGIN_FAILED',
+        entityType: 'User',
+        entityId: user.id,
+        result: ENAuditLogResult.DENIED,
+        metadata: { identifier: identifierValue, locked: nextAttempts >= 5 },
+      });
+      if (nextAttempts >= 5) {
+        throw new HttpException(
+          'Too many attempts, try again later',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
       }
-      // For any other error from argon2, treat as invalid credentials
       throw new UnauthorizedException('Invalid credentials');
     }
+
+    if (!identifier.verifiedAt) {
+      throw new ForbiddenException('Identifier is not verified');
+    }
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { failedLoginAttempts: 0, lockedUntil: null },
+    });
+
+    if (user.isTwoFactorEnabled) {
+      const challengeToken = await this.jwtService.signAsync(
+        { sub: user.id, person_id: user.personId },
+        { expiresIn: '5m', audience: '2fa-challenge' },
+      );
+      return { status: '2fa_required' as const, challengeToken };
+    }
+
+    return this.issueSession(user, identifierValue, request);
+  }
+
+  private async issueSession(
+    user: TUserWithPerson,
+    identifier: string,
+    request?: { ip?: string; userAgent?: string },
+  ) {
+    const now = this.timezoneService.nowUtc();
+    const sessionExpiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60_000);
+    const refreshToken = randomBytes(32).toString('base64url');
+    const refreshHash = computeTokenHash(
+      this.configService.getOrThrow<string>('TOKEN_HASH_SECRET'),
+      refreshToken,
+    );
+
+    const session = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.session.create({
+        data: {
+          userId: user.id,
+          ip: request?.ip,
+          userAgent: request?.userAgent,
+          expiresAt: sessionExpiresAt,
+        },
+      });
+      await tx.refreshToken.create({
+        data: {
+          hash: refreshHash,
+          sessionId: created.id,
+          expiresAt: sessionExpiresAt,
+        },
+      });
+      await tx.user.update({
+        where: { id: user.id },
+        data: { lastLogin: now },
+      });
+      return created;
+    });
+
+    const accessToken = await this.jwtService.signAsync({
+      sub: user.id,
+      sid: session.id,
+      person_id: user.personId,
+    });
+    await this.auditLogsService.createLog({
+      category: ENFeature.ACCESS,
+      action: 'LOGIN',
+      entityType: 'User',
+      entityId: user.id,
+      metadata: { identifier },
+      doneById: user.id,
+    });
+
+    return {
+      accessToken,
+      refreshToken,
+      user: {
+        user_id: user.id,
+        person_id: user.personId,
+        name: `${user.person.firstName} ${user.person.lastName}`,
+        email: identifier,
+        isEmailVerified: user.isEmailVerified,
+      },
+    };
+  }
+
+  private async signAccessToken(
+    userId: string,
+    personId: string,
+    sessionId: string,
+  ) {
+    return this.jwtService.signAsync({
+      sub: userId,
+      sid: sessionId,
+      person_id: personId,
+    });
+  }
+
+  public async refreshSession(refreshToken: string | undefined) {
+    if (!refreshToken) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const tokenHash = computeTokenHash(
+      this.configService.getOrThrow<string>('TOKEN_HASH_SECRET'),
+      refreshToken,
+    );
+    const token = await this.prisma.refreshToken.findUnique({
+      where: { hash: tokenHash },
+      include: {
+        session: { include: { user: { include: { person: true } } } },
+      },
+    });
+    const now = this.timezoneService.nowUtc();
+
+    if (
+      !token ||
+      !token.session ||
+      token.expiresAt <= now ||
+      token.session.expiresAt <= now ||
+      token.session.revokedAt
+    ) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    if (token.usedAt) {
+      const reuseWindow = now.getTime() - token.usedAt.getTime();
+      if (reuseWindow > 10_000) {
+        await this.prisma.session.updateMany({
+          where: { id: token.sessionId, revokedAt: null },
+          data: { revokedAt: now },
+        });
+        await this.auditLogsService.createLog({
+          category: ENFeature.ACCESS,
+          action: 'REFRESH_TOKEN_REUSE',
+          entityType: 'Session',
+          entityId: token.sessionId,
+          result: ENAuditLogResult.DENIED,
+          doneById: token.session.userId,
+        });
+      }
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const nextRefreshToken = randomBytes(32).toString('base64url');
+    const nextHash = computeTokenHash(
+      this.configService.getOrThrow<string>('TOKEN_HASH_SECRET'),
+      nextRefreshToken,
+    );
+    const rotated = await this.prisma.$transaction(async (tx) => {
+      const consumed = await tx.refreshToken.updateMany({
+        where: {
+          id: token.id,
+          usedAt: null,
+          expiresAt: { gt: now },
+        },
+        data: { usedAt: now },
+      });
+      if (consumed.count !== 1) return false;
+
+      await tx.refreshToken.create({
+        data: {
+          hash: nextHash,
+          sessionId: token.sessionId,
+          expiresAt: token.session.expiresAt,
+        },
+      });
+      await tx.session.update({
+        where: { id: token.sessionId },
+        data: { lastUsedAt: now },
+      });
+      return true;
+    });
+
+    if (!rotated) throw new UnauthorizedException('Invalid refresh token');
+
+    return {
+      accessToken: await this.signAccessToken(
+        token.session.userId,
+        token.session.user.personId,
+        token.sessionId,
+      ),
+      refreshToken: nextRefreshToken,
+    };
+  }
+
+  public async logout(userId: string, sessionId?: string) {
+    if (sessionId) {
+      await this.prisma.session.updateMany({
+        where: { id: sessionId, userId, revokedAt: null },
+        data: { revokedAt: this.timezoneService.nowUtc() },
+      });
+    }
+    await this.auditLogsService.createLog({
+      category: ENFeature.ACCESS,
+      action: 'LOGOUT',
+      entityType: 'User',
+      entityId: userId,
+      doneById: userId,
+    });
+    return { message: 'Logged out successfully' };
+  }
+
+  public async logoutAll(userId: string) {
+    await this.prisma.session.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: this.timezoneService.nowUtc() },
+    });
+    await this.auditLogsService.createLog({
+      category: ENFeature.ACCESS,
+      action: 'LOGOUT_ALL',
+      entityType: 'User',
+      entityId: userId,
+      doneById: userId,
+    });
+    return { message: 'All sessions logged out successfully' };
+  }
+
+  public async listSessions(userId: string) {
+    return this.prisma.session.findMany({
+      where: { userId },
+      select: {
+        id: true,
+        userAgent: true,
+        ip: true,
+        createdAt: true,
+        lastUsedAt: true,
+        expiresAt: true,
+        revokedAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  public async revokeSession(userId: string, sessionId: string) {
+    const result = await this.prisma.session.updateMany({
+      where: { id: sessionId, userId, revokedAt: null },
+      data: { revokedAt: this.timezoneService.nowUtc() },
+    });
+    if (result.count !== 1) {
+      throw new ResourceNotFoundException('Session not found', 'Session');
+    }
+    return { message: 'Session revoked successfully' };
   }
 
   private async updateLastLogin(user: User) {

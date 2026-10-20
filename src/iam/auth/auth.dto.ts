@@ -107,7 +107,27 @@ export class RegisterUserPersonDto extends IntersectionType(
   RegisterUserDto,
 ) {}
 
-export class LoginDto extends RegisterUserDto {}
+export class LoginDto {
+  @ValidateIf((value) => !value.phone || value.email)
+  @IsOptional()
+  @Transform(({ value }: { value: string | undefined }) =>
+    value?.trim().toLowerCase(),
+  )
+  @IsEmail()
+  email?: string;
+
+  @ValidateIf((value) => !value.email || value.phone)
+  @IsOptional()
+  @Transform(({ value }: { value: string | undefined }) =>
+    normalizePhone(value),
+  )
+  @IsPhoneNumber(undefined, { message: 'Invalid Phone Number' })
+  phone?: string;
+
+  @IsString()
+  @MinLength(5)
+  password!: string;
+}
 
 export class VerifyIdentifierDto {
   @IsOptional()
@@ -144,4 +164,10 @@ export class ResendVerificationDto {
   })
   @IsString()
   identifier!: string;
+}
+
+export class RefreshTokenDto {
+  @IsOptional()
+  @IsString()
+  refreshToken?: string;
 }

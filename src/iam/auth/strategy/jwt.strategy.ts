@@ -7,6 +7,7 @@ import { TPayload } from '../auth.types';
 export type TUserJWTPayload = {
   user_id: string;
   person_id: string;
+  sid?: string;
 };
 
 declare global {
@@ -39,6 +40,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     return {
       user_id: payload.sub,
       person_id: payload.person_id,
+      sid: payload.sid,
     };
   }
 }

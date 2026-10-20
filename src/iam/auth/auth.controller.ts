@@ -1,12 +1,15 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   Put,
   Query,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -14,14 +17,12 @@ import { AuthService } from './auth.service';
 import {
   LoginDto,
   RegisterUserPersonDto,
+  RefreshTokenDto,
   ResendVerificationDto,
   VerifyIdentifierDto,
 } from './auth.dto';
-import { Response } from 'express';
-import {
-  PassportJwtGuard,
-  PassportLocalGuard,
-} from '@common/guards/passport.guard';
+import { Request, Response } from 'express';
+import { PassportJwtGuard } from '@common/guards/passport.guard';
 import { CurrentUser } from '@common/decorators/current-user';
 import { TPayload, TUserData } from './auth.types';
 import { UserTokenService } from '../user-token/user-token.service';
@@ -60,40 +61,129 @@ export class AuthController {
   }
 
   @HttpCode(HttpStatus.OK)
-  @Post('/signin')
-  @UseGuards(PassportLocalGuard)
+  @Post('/login')
   public async login(
     @Body() loginDto: LoginDto,
-    @CurrentUser() userData: TUserData,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    await this.authService.assignCookie(
-      {
-        sub: userData.user_id,
-        person_id: userData.person_id,
-      },
-      res,
-    );
+    const result = await this.authService.validateCredentials(loginDto, {
+      ip: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+    if ('status' in result) return result;
+
+    const isMobile = req.header('x-client-type')?.toLowerCase() === 'mobile';
+    if (!isMobile) {
+      res.cookie('accessToken', result.accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 15 * 60_000,
+      });
+      res.cookie('refresh_token', result.refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/api/auth',
+        maxAge: 30 * 24 * 60 * 60_000,
+      });
+    }
 
     return {
       message: 'Logged in Successfully',
-      user: userData,
+      user: result.user,
+      accessToken: isMobile ? result.accessToken : undefined,
+      refreshToken: isMobile ? result.refreshToken : undefined,
     };
   }
 
   @HttpCode(HttpStatus.OK)
-  @Post('/signout')
-  public async signout(@Res({ passthrough: true }) res: Response) {
+  @Post('/refresh')
+  public async refresh(
+    @Body() data: RefreshTokenDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const refreshToken = data.refreshToken ?? req.cookies?.refresh_token;
+    const result = await this.authService.refreshSession(refreshToken);
+    const isMobile = req.header('x-client-type')?.toLowerCase() === 'mobile';
+    if (!isMobile) {
+      res.cookie('accessToken', result.accessToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        maxAge: 15 * 60_000,
+      });
+      res.cookie('refresh_token', result.refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/api/auth',
+        maxAge: 30 * 24 * 60 * 60_000,
+      });
+    }
+    return {
+      accessToken: isMobile ? result.accessToken : undefined,
+      refreshToken: isMobile ? result.refreshToken : undefined,
+    };
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Post('/logout')
+  @UseGuards(PassportJwtGuard)
+  public async logout(
+    @CurrentUser() user: { user_id: string; sid?: string },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.logout(user.user_id, user.sid);
     res.cookie('accessToken', '', {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
       expires: new Date(0), // Setting expiration date to Jan 1, 1970 (tells browser to delete it instantly)
     });
+    res.cookie('refresh_token', '', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      path: '/api/auth',
+      expires: new Date(0),
+    });
+    return result;
+  }
 
-    return {
-      message: 'Signed out successfully',
-    };
+  @HttpCode(HttpStatus.OK)
+  @Post('/logout-all')
+  @UseGuards(PassportJwtGuard)
+  public async logoutAll(
+    @CurrentUser() user: { user_id: string },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.logoutAll(user.user_id);
+    res.cookie('accessToken', '', { expires: new Date(0) });
+    res.cookie('refresh_token', '', {
+      expires: new Date(0),
+      path: '/api/auth',
+    });
+    return result;
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Get('/sessions')
+  @UseGuards(PassportJwtGuard)
+  public async sessions(@CurrentUser() user: { user_id: string }) {
+    return this.authService.listSessions(user.user_id);
+  }
+
+  @HttpCode(HttpStatus.OK)
+  @Delete('/sessions/:id')
+  @UseGuards(PassportJwtGuard)
+  public async revokeSession(
+    @CurrentUser() user: { user_id: string },
+    @Param('id') sessionId: string,
+  ) {
+    return this.authService.revokeSession(user.user_id, sessionId);
   }
 
   @HttpCode(HttpStatus.OK)
