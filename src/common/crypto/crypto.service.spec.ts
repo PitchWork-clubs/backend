@@ -41,7 +41,10 @@ describe('CryptoService', () => {
 
   it('rejects tampered ciphertext', () => {
     const encrypted = service.encrypt('secret-value');
-    const tampered = `${encrypted.slice(0, -1)}x`;
+    const parts = encrypted.split(':');
+    const ciphertext = Buffer.from(parts[2], 'base64');
+    ciphertext[0] ^= 1;
+    const tampered = [parts[0], parts[1], ciphertext.toString('base64')].join(':');
 
     expect(() => service.decrypt(tampered)).toThrow();
   });

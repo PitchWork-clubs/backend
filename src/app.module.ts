@@ -20,6 +20,7 @@ import { AppResolver } from './app.resolver';
 import { MediaModule } from './media/media.module';
 import { FeatureModule } from './clubs/feature/feature.module';
 import { CryptoModule } from './common/crypto/crypto.module';
+import { AccessModule } from './common/guards/access.module';
 
 import { validateEnv } from './config/env';
 
@@ -50,6 +51,7 @@ import { validateEnv } from './config/env';
     MediaModule,
     FeatureModule,
     CryptoModule,
+    AccessModule,
   ],
   providers: [TasksService, AppResolver],
 })

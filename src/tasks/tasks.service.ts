@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '@infrastructure/prisma/prisma.service';
 import { TimezoneService } from '@common/timezone/timezone.service';
 import { ENUserTokenStatus, ENInvitationStatus } from '@prisma/client';
+import { ClubService } from '@clubs/club/club.service';
 
 @Injectable()
 export class TasksService {
@@ -11,6 +12,7 @@ export class TasksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly timezoneService: TimezoneService,
+    private readonly clubService: ClubService,
   ) {}
 
   /**
@@ -32,6 +34,16 @@ export class TasksService {
       this.logger.log(`Deleted ${result.count} expired/disrupted user tokens.`);
     } catch (error) {
       this.logger.error('Failed to delete expired user tokens:', error);
+    }
+  }
+
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  public async archiveExpiredPendingClubs() {
+    this.logger.log('Running task: archiveExpiredPendingClubs...');
+    try {
+      await this.clubService.archiveExpiredPendingClubs();
+    } catch (error) {
+      this.logger.error('Failed to archive expired pending clubs:', error);
     }
   }
 

@@ -7,14 +7,11 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '@infrastructure/prisma/prisma.service';
-import {
-  ENMembershipPermissionAction,
-  ENMembershipStatus,
-  Prisma,
-} from '@prisma/client';
+import { ENMembershipStatus, Prisma } from '@prisma/client';
 import { getRequestFromContext } from '@common/utils/request-context.util';
 import { TimezoneService } from '@common/timezone/timezone.service';
 import { AccessContext, IPermissionScope } from './access-context';
+import { AccessResolutionService } from './access-resolution.service';
 
 export type TActiveMembershipPayload = Prisma.MembershipGetPayload<{
   include: {
@@ -72,6 +69,7 @@ export class ActiveMembershipGuard implements CanActivate {
   constructor(
     private readonly prisma: PrismaService,
     private readonly timezoneService: TimezoneService,
+    private readonly accessResolution: AccessResolutionService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -149,52 +147,13 @@ export class ActiveMembershipGuard implements CanActivate {
       activeMembership.club.timezone,
     );
 
-    // Compute effective permissions with scopes
-    const codeMap = new Map<string, IPermissionScope[]>();
-
-    // 1. Collect permissions from all assigned roles with their scopes
-    for (const mr of activeMembership.membershipRoles) {
-      for (const rp of mr.role.permissions) {
-        const code = rp.permission.code;
-        const currentScopes = codeMap.get(code) || [];
-        currentScopes.push({
-          scope: mr.scope,
-          scopeId: mr.scopeId,
-        });
-        codeMap.set(code, currentScopes);
-      }
-    }
-
-    // 2. Apply explicit direct overrides
-    for (const override of activeMembership.membershipPermissions) {
-      const code = override.permission.code;
-      if (override.action === ENMembershipPermissionAction.REVOKE) {
-        // Explicit REVOKE completely strips the permission (REVOKE always wins)
-        codeMap.delete(code);
-      } else if (override.action === ENMembershipPermissionAction.GRANT) {
-        // Explicit GRANT grants at club-wide scope
-        const currentScopes = codeMap.get(code) || [];
-        currentScopes.push({ scope: 'CLUB', scopeId: null });
-        codeMap.set(code, currentScopes);
-      }
-    }
-
-    const effectivePermissions = Array.from(codeMap.keys());
-    const relatedPersonIds =
-      activeMembership.person.relatedPersonLinks?.map((l) => l.personId) || [];
-
-    const accessContext = new AccessContext(
-      activeMembership.clubId,
-      activeMembership.id,
-      activeMembership.personId,
-      codeMap,
-      relatedPersonIds,
-    );
+    const resolvedAccess = await this.accessResolution.resolve(activeMembership);
 
     req.activeMembership = activeMembership;
-    req.effectivePermissions = effectivePermissions;
-    req.permissionScopes = codeMap;
-    req.accessContext = accessContext;
+    req.effectivePermissions = resolvedAccess.effectivePermissions;
+    req.permissionScopes = resolvedAccess.permissionScopes;
+    req.accessContext = resolvedAccess.accessContext;
+    req.clubFeatures = resolvedAccess.enabledFeatures;
     req.club = {
       clubId: activeMembership.clubId,
       membershipId: activeMembership.id,

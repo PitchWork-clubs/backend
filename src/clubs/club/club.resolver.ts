@@ -67,6 +67,23 @@ export class ClubResolver {
     );
   }
 
+  @Mutation(() => Club, { name: 'verifyClub' })
+  async verifyClub(
+    @Args('clubId') clubId: string,
+    @CurrentUser() currentUser: TUserJWTPayload,
+  ) {
+    return this.clubService.verifyClub(clubId, currentUser.user_id);
+  }
+
+  @Mutation(() => Club, { name: 'rejectClub' })
+  async rejectClub(
+    @Args('clubId') clubId: string,
+    @Args('reason', { nullable: true }) reason: string | undefined,
+    @CurrentUser() currentUser: TUserJWTPayload,
+  ) {
+    return this.clubService.rejectClub(clubId, currentUser.user_id, reason);
+  }
+
   @Mutation(() => Boolean, { name: 'archiveClub' })
   @UseGuards(ActiveMembershipGuard, PermissionsGuard)
   @RequirePermissions(true, ['CLUB_DELETE'])

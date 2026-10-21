@@ -105,6 +105,8 @@ enum ENMembershipPermissionAction {
 model MembershipPermission {
   id     String                       @id @default(cuid())
   action ENMembershipPermissionAction
+  scope  ENScopeType                  @default(CLUB)
+  scopeId String                      @default("") @map("scope_id")
 
   // relations
   membershipId String     @map("membership_id")
@@ -112,6 +114,7 @@ model MembershipPermission {
   permissionId String     @map("permission_id")
   permission   Permission @relation(fields: [permissionId], references: [id])
 
-  @@unique([membershipId, permissionId])
+  @@unique([membershipId, permissionId, scope, scopeId])
+  @@index([membershipId, scope, scopeId])
   @@map("membership_permissions")
 }

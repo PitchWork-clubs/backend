@@ -3,6 +3,7 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "target": "ES2023",
+    "types": ["node", "jest"],
 
     "declaration": true,
     "removeComments": true,

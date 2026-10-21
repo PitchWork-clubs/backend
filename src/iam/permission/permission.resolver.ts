@@ -43,10 +43,14 @@ export class PermissionResolver {
   async grantPermission(
     @Args('membershipId') targetMembershipId: string,
     @Args('input') input: GrantPermissionInput,
+    @CurrentMembership() currentMembership: TActiveMembershipPayload,
   ) {
     return this.permissionService.grantDirectPermission(
       targetMembershipId,
       input.permissionCode,
+      input.scope,
+      input.scopeId,
+      currentMembership,
     );
   }
 
@@ -70,11 +74,15 @@ export class PermissionResolver {
     @Args('membershipId') targetMembershipId: string,
     @Args('input') input: RevokePermissionInput,
     @CurrentUser() currentUser: TUserJWTPayload,
+    @CurrentMembership() currentMembership: TActiveMembershipPayload,
   ) {
     await this.permissionService.revokeDirectPermission(
       targetMembershipId,
       input.permissionCode,
       currentUser.user_id,
+      input.scope,
+      input.scopeId,
+      currentMembership,
     );
     return true;
   }
