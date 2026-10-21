@@ -1,5 +1,4 @@
 import { Reflector } from '@nestjs/core';
-import { PrismaService } from '@infrastructure/prisma/prisma.service';
 import {
   CanActivate,
   ExecutionContext,
@@ -8,9 +7,10 @@ import {
   InternalServerErrorException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ENClubFeatureStatus, ENFeature } from '@prisma/client';
+import { ENFeature } from '@prisma/client';
 import { REQUIRED_FEATURE_KEY } from '@common/decorators/require-feature.decorator';
 import { getRequestFromContext } from '@common/utils/request-context.util';
+import { AccessResolutionService } from './access-resolution.service';
 
 declare global {
   namespace Express {
@@ -23,7 +23,7 @@ declare global {
 @Injectable()
 export class FeatureGuard implements CanActivate {
   constructor(
-    private readonly Prisma: PrismaService,
+    private readonly accessResolution: AccessResolutionService,
     private readonly reflector: Reflector,
   ) {}
 
@@ -46,16 +46,9 @@ export class FeatureGuard implements CanActivate {
     let enabledFeatures: Set<ENFeature>;
 
     try {
-      const rows = await this.Prisma.clubFeature.findMany({
-        where: {
-          clubId,
-          status: ENClubFeatureStatus.ENABLED,
-          feature: { code: { in: requiredFeatures }, isActive: true },
-        },
-        select: { feature: { select: { code: true } } },
-      });
-
-      enabledFeatures = new Set(rows.map((r) => r.feature.code));
+      enabledFeatures = new Set(
+        await this.accessResolution.getEnabledFeatures(clubId),
+      );
     } catch (error) {
       throw new InternalServerErrorException('Validating club features failed');
     }
