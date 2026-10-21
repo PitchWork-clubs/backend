@@ -21,9 +21,7 @@ model Club {
   roles            Role[]
   clubFeatures     ClubFeature[]
   teams            Team[]
-  staffRecord      StaffRecord?      @relation(fields: [staffRecordId], references: [id])
   coachAssignments CoachAssignment[]
-  staffRecordId    String?
   personRelations PersonRelation[]
 
   // timestamps
@@ -164,8 +162,6 @@ model StaffRecord {
   // relations
   membershipId String     @map("membership_id")
   membership   Membership @relation(fields: [membershipId, clubId], references: [id, clubId], onDelete: Cascade)
-  clubs        Club[]
-
   @@unique([membershipId, clubId])
   @@index([clubId])
   @@map("staff_records")
