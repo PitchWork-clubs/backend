@@ -166,15 +166,20 @@ export class ActiveMembershipGuard implements CanActivate {
     }
 
     // 2. Apply explicit direct overrides
-    for (const override of activeMembership.membershipPermissions) {
+    for (const override of activeMembership.membershipPermissions as any[]) {
       const code = override.permission.code;
+      const overrideScope = { scope: override.scope, scopeId: override.scopeId };
+      const currentScopes = codeMap.get(code) || [];
       if (override.action === ENMembershipPermissionAction.REVOKE) {
-        // Explicit REVOKE completely strips the permission (REVOKE always wins)
-        codeMap.delete(code);
+        const remainingScopes = currentScopes.filter(
+          (scope) => scope.scope !== override.scope || scope.scopeId !== override.scopeId,
+        );
+        if (remainingScopes.length > 0) codeMap.set(code, remainingScopes);
+        else codeMap.delete(code);
       } else if (override.action === ENMembershipPermissionAction.GRANT) {
-        // Explicit GRANT grants at club-wide scope
-        const currentScopes = codeMap.get(code) || [];
-        currentScopes.push({ scope: 'CLUB', scopeId: null });
+        if (!currentScopes.some((scope) => scope.scope === override.scope && scope.scopeId === override.scopeId)) {
+          currentScopes.push(overrideScope);
+        }
         codeMap.set(code, currentScopes);
       }
     }
