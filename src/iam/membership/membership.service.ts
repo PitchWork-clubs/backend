@@ -9,7 +9,6 @@ import {
 import {
   ENMembershipStatus,
   ENMembershipType,
-  ENFeature,
 } from '@prisma/client';
 import { PrismaService } from '@infrastructure/prisma/prisma.service';
 import { TActiveMembershipPayload } from '@common/guards/active-membership.guard';
@@ -27,6 +26,14 @@ export class MembershipService {
     clubId: string,
     types: ENMembershipType[],
   ) {
+    const uniqueTypes = [...new Set(types)];
+    if (uniqueTypes.length === 0) {
+      throw new ConflictException('A membership must have at least one type.');
+    }
+    if (uniqueTypes.length !== types.length) {
+      throw new ConflictException('Membership types must be unique.');
+    }
+
     const personExists = await this.prisma.person.findUnique({
       where: { id: personId },
     });
@@ -63,7 +70,7 @@ export class MembershipService {
             clubId,
             joinedAt: this.timezoneService.nowUtc(),
             types: {
-              create: types.map((type) => ({ type })),
+              create: uniqueTypes.map((type) => ({ type })),
             },
           },
           include: { types: true },
@@ -101,6 +108,18 @@ export class MembershipService {
     }
 
     try {
+      return await this.prisma.$transaction(async (tx) => {
+        const endedMembership = await tx.membership.update({
+          where: { id: membershipId },
+          data: {
+            status: ENMembershipStatus.ENDED,
+            endedAt: this.timezoneService.nowUtc(),
+          },
+          include: { types: true },
+        });
+
+        return endedMembership;
+      });
     } catch (error) {
       throw new InternalServerErrorException(parsePrismaError(error));
     }
