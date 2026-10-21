@@ -1228,11 +1228,19 @@ export class AuthService {
   public async userVerified(user_id: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: user_id },
-      include: { person: true },
+      include: {
+        person: true,
+        identifiers: {
+          where: { verifiedAt: { not: null } },
+          select: { id: true },
+        },
+      },
     });
 
     if (!user) throw new ResourceNotFoundException('User not found', 'User');
 
-    return user.isEmailVerified;
+    // Email verification is retained for compatibility, while phone-only
+    // accounts are also allowed once their identifier has been verified.
+    return user.isEmailVerified || user.identifiers.length > 0;
   }
 }

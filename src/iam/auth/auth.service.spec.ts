@@ -39,7 +39,7 @@ describe('AuthService authentication lifecycle', () => {
       $transaction: jest.fn(async (callback: (value: any) => unknown) => callback(tx)),
       userIdentifier: { findUnique: jest.fn() },
       userToken: { findFirst: jest.fn(), findUnique: jest.fn(), updateMany: jest.fn() },
-      user: { update: jest.fn() },
+      user: { findUnique: jest.fn(), update: jest.fn() },
     };
     const communication = {
       sendSms: jest.fn(async (_to: string, message: string) => sentSms.push(message)),
@@ -145,5 +145,27 @@ describe('AuthService authentication lifecycle', () => {
     });
     expect(tx.session.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ userId: 'user-1', ip: '127.0.0.1' }) }));
     expect(tx.refreshToken.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ sessionId: 'session-1' }) }));
+  });
+
+  it('accepts a verified phone identifier for protected access', async () => {
+    const { service, prisma } = createService();
+    prisma.user.findUnique.mockResolvedValue({
+      ...user,
+      isEmailVerified: false,
+      identifiers: [{ id: 'phone-id' }],
+    });
+
+    await expect(service.userVerified('user-1')).resolves.toBe(true);
+  });
+
+  it('rejects a user with no verified email or phone identifier', async () => {
+    const { service, prisma } = createService();
+    prisma.user.findUnique.mockResolvedValue({
+      ...user,
+      isEmailVerified: false,
+      identifiers: [],
+    });
+
+    await expect(service.userVerified('user-1')).resolves.toBe(false);
   });
 });

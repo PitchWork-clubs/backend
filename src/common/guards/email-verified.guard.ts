@@ -1,4 +1,4 @@
-// email-verified.guard.ts
+// identifier-verified.guard.ts
 import {
   Injectable,
   CanActivate,
@@ -23,7 +23,7 @@ export class EmailVerifiedGuard implements CanActivate {
     const isVerified = await this.authService.userVerified(user.user_id);
 
     if (!isVerified)
-      throw new ForbiddenException('Your Email address is not verified.');
+      throw new ForbiddenException('Your email or phone number is not verified.');
 
     return true;
   }
