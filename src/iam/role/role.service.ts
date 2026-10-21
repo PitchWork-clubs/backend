@@ -6,7 +6,7 @@ import {
 import { PrismaService } from '@infrastructure/prisma/prisma.service';
 import { TActiveMembershipPayload } from '@common/guards/active-membership.guard';
 import { parsePrismaError } from '@common/utils/error-handler';
-import { Prisma } from '@prisma/client';
+import { ENScopeType, Prisma } from '@prisma/client';
 import { ResourceNotFoundException } from '@common/exceptions/resource-not-found';
 import { CreateRoleDto, UpdateRoleDto } from './role.dto';
 import { UpdateClubDto } from '@clubs/club/club.dto';
@@ -91,6 +91,20 @@ export class RoleService {
 
     if (targetMembership.clubId !== adminMembership.clubId)
       throw new BadRequestException('Target membership does not belong to the same club');
+
+    if (scope === ENScopeType.TEAM) {
+      if (!scopeId) {
+        throw new BadRequestException('A team is required for a TEAM-scoped role');
+      }
+      const team = await this.prisma.team.findFirst({
+        where: { id: scopeId, clubId: adminMembership.clubId },
+      });
+      if (!team) {
+        throw new BadRequestException('Team does not belong to the same club');
+      }
+    } else if (scopeId) {
+      throw new BadRequestException('scopeId is only valid for a TEAM-scoped role');
+    }
 
     const role = await this.prisma.role.findFirst({
       where: {

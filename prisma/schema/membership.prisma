@@ -199,7 +199,7 @@ model CoachAssignment {
 
   // relations
   teamId       String     @map("team_id")
-  team         Team       @relation(fields: [teamId], references: [id])
+  team         Team       @relation(fields: [teamId, clubId], references: [id, clubId])
   clubId       String     @map("club_id")
   membershipId String     @map("membership_id")
   membership   Membership @relation(fields: [membershipId, clubId], references: [id, clubId], onDelete: Restrict, onUpdate: Cascade)
@@ -207,6 +207,7 @@ model CoachAssignment {
 
   @@index([membershipId])
   @@index([teamId])
+  @@index([teamId, clubId])
   @@map("coach_assignments")
 }
 
