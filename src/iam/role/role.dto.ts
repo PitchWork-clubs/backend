@@ -1,5 +1,6 @@
 import { Field, InputType } from '@nestjs/graphql';
-import { IsNotEmpty, IsString, Length } from 'class-validator';
+import { ENScopeType } from '@prisma/client';
+import { IsEnum, IsNotEmpty, IsOptional, IsString, Length } from 'class-validator';
 
 @InputType()
 export class UpdateRoleInput {
@@ -25,6 +26,16 @@ export class AssignRoleInput {
   @IsString()
   @Length(3, 10)
   roleCode!: string;
+
+  @Field(() => String, { nullable: true })
+  @IsOptional()
+  @IsEnum(ENScopeType)
+  scope?: ENScopeType;
+
+  @Field(() => String, { nullable: true })
+  @IsOptional()
+  @IsString()
+  scopeId?: string;
 }
 
 export { AssignRoleInput as AssignRoleDto };

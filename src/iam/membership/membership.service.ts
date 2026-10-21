@@ -21,6 +21,28 @@ export class MembershipService {
     private readonly timezoneService: TimezoneService,
   ) {}
 
+  public async listMemberships(clubId: string) {
+    return this.prisma.membership.findMany({
+      where: { clubId },
+      include: { person: true, types: true, membershipRoles: { include: { role: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  public async getMembership(membershipId: string, clubId: string) {
+    const membership = await this.prisma.membership.findFirst({
+      where: { id: membershipId, clubId },
+      include: {
+        person: true,
+        types: true,
+        membershipRoles: { include: { role: { include: { permissions: { include: { permission: true } } } } } },
+        membershipPermissions: { include: { permission: true } },
+      },
+    });
+    if (!membership) throw new ResourceNotFoundException('Membership not found', 'membership');
+    return membership;
+  }
+
   public async createMembership(
     personId: string,
     clubId: string,

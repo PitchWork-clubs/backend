@@ -9,6 +9,7 @@ import {
   IsOptional,
   IsString,
   Length,
+  MaxLength,
 } from 'class-validator';
 import * as countries from 'i18n-iso-countries';
 import { Transform } from 'class-transformer';
@@ -125,3 +126,14 @@ export class UpdateClubInput {
 }
 
 export { UpdateClubInput as UpdateClubDto };
+
+@InputType()
+export class RejectClubInput {
+  @Field(() => String, { nullable: true })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
+}
+
+export { RejectClubInput as RejectClubDto };

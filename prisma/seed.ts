@@ -30,6 +30,11 @@ const roleData = [
     description: "Admin role with full access to all features of the club",
     permissionCodes: [] // will get all permissions dynamically
   },
+  {
+    code: "PENDING_OWNER", name: "Pending Owner",
+    description: "Owner awaiting platform verification",
+    permissionCodes: []
+  },
 ];
 
 const featuresData = [

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -18,6 +19,8 @@ import { TActiveMembershipPayload } from '@common/guards/active-membership.guard
 import { CloudinaryService } from '../../media/cloudinary/cloudinary.service';
 import { ENClubFeatureStatus } from '@generated/prisma-nestjs-graphql/prisma/en-club-feature-status.enum';
 import { TimezoneService } from '@common/timezone/timezone.service';
+import { AuditLogsService } from '@infrastructure/audit-logs/audit-logs.service';
+import { ENAuditLogResult, ENFeature } from '@prisma/client';
 
 @Injectable()
 export class ClubService {
@@ -25,6 +28,7 @@ export class ClubService {
     private readonly prisma: PrismaService,
     private readonly cloudinaryService: CloudinaryService,
     private readonly timezoneService: TimezoneService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   private logger = new Logger(ClubService.name);
@@ -97,7 +101,7 @@ export class ClubService {
               createClubDto.timezone ?? timezone,
               undefined,
             ),
-            status: ENClubStatus.ACTIVE,
+            status: ENClubStatus.PENDING_VERIFICATION,
           },
         });
 
@@ -114,40 +118,34 @@ export class ClubService {
             types: {
               create: uniqueTypes.map((type) => ({ type: type })),
             },
-            status: ENMembershipStatus.ACTIVE,
+            status: ENMembershipStatus.PENDING,
           },
           include: { types: true },
         });
 
-        // Assign ADMIN role to creator
-        const adminRole = await tx.role.findFirst({
-          where: { code: 'ADMIN', isSystem: true },
+        // Pending owners must not receive active access before platform approval.
+        let pendingOwnerRole = await tx.role.findFirst({
+          where: { code: 'PENDING_OWNER', isSystem: true, clubId: null },
         });
 
-        if (adminRole) {
+        if (!pendingOwnerRole) {
+          pendingOwnerRole = await tx.role.create({
+            data: {
+              code: 'PENDING_OWNER',
+              name: 'Pending Owner',
+              description: 'Owner awaiting platform verification',
+              isSystem: true,
+            },
+          });
+        }
+
+        if (pendingOwnerRole) {
           await tx.membershipRole.create({
             data: {
               membershipId: ownerMembership.id,
-              roleId: adminRole.id,
+              roleId: pendingOwnerRole.id,
               scope: 'CLUB',
             },
-          });
-          // NO membershipPermission records inserted here!
-          // Role defaults resolve automatically at runtime via ActiveMembershipGuard.
-        }
-
-        const features = await tx.feature.findMany({
-          where: { isActive: true, isCore: true },
-        });
-        if (features.length > 0) {
-          await tx.clubFeature.createMany({
-            data: features.map((feature) => ({
-              clubId: club.id,
-              featureId: feature.id,
-              status: ENClubFeatureStatus.ENABLED,
-              enabledById: feature.isCore ? ownerMembership.id : null,
-              enabledAt: feature.isCore ? now : null,
-            })),
           });
         }
 
@@ -155,6 +153,18 @@ export class ClubService {
           where: { id: club.id },
           data: { createdById: ownerMembership.id },
         });
+
+        await this.auditLogs.createLog(
+          {
+            category: ENFeature.CLUB,
+            action: 'club-created-pending-verification',
+            entityType: 'Club',
+            entityId: finalizedClub.id,
+            doneById: userId,
+            metadata: { club_id: finalizedClub.id, membership_id: ownerMembership.id },
+          },
+          tx,
+        );
 
         return finalizedClub;
       });
@@ -221,5 +231,134 @@ export class ClubService {
    */
   public async archiveClub(clubId: string, membershipId: string) {}
 
-  public async getClub(clubId: string) {}
+  public async verifyClub(clubId: string, platformAdminUserId: string) {
+    await this.requirePlatformAdmin(platformAdminUserId);
+
+    return this.prisma.$transaction(async (tx) => {
+      const club = await tx.club.findUnique({
+        where: { id: clubId },
+        include: { createdBy: true },
+      });
+      if (!club) throw new ResourceNotFoundException('Club not found', 'club');
+      if (club.status === ENClubStatus.ACTIVE) return club;
+      if (club.status !== ENClubStatus.PENDING_VERIFICATION) {
+        throw new ConflictException('Only pending clubs can be approved');
+      }
+
+      const membership = club.createdBy;
+      if (!membership) throw new ConflictException('Club creator membership is missing');
+
+      const adminRole = await tx.role.findFirst({
+        where: { code: 'ADMIN', isSystem: true, clubId: null },
+      });
+      if (!adminRole) throw new InternalServerErrorException('System ADMIN role is missing');
+
+      await tx.membershipRole.deleteMany({
+        where: { membershipId: membership.id, role: { code: 'PENDING_OWNER' } },
+      });
+      await tx.membershipRole.create({
+        data: { membershipId: membership.id, roleId: adminRole.id, scope: 'CLUB' },
+      });
+      await tx.membership.update({
+        where: { id: membership.id },
+        data: { status: ENMembershipStatus.ACTIVE },
+      });
+      const features = await tx.feature.findMany({ where: { isActive: true, isCore: true } });
+      if (features.length) {
+        await tx.clubFeature.createMany({
+          data: features.map((feature) => ({
+            clubId,
+            featureId: feature.id,
+            status: ENClubFeatureStatus.ENABLED,
+            enabledById: membership.id,
+            enabledAt: this.timezoneService.nowUtc(),
+          })),
+          skipDuplicates: true,
+        });
+      }
+      const approved = await tx.club.update({
+        where: { id: clubId },
+        data: { status: ENClubStatus.ACTIVE },
+      });
+      await this.auditLogs.createLog({
+        category: ENFeature.CLUB,
+        action: 'club-verified',
+        entityType: 'Club',
+        entityId: clubId,
+        doneById: platformAdminUserId,
+      }, tx);
+      return approved;
+    });
+  }
+
+  public async rejectClub(clubId: string, platformAdminUserId: string, reason?: string) {
+    await this.requirePlatformAdmin(platformAdminUserId);
+    return this.prisma.$transaction(async (tx) => {
+      const club = await tx.club.findUnique({ where: { id: clubId }, include: { createdBy: true } });
+      if (!club) throw new ResourceNotFoundException('Club not found', 'club');
+      if (club.status === ENClubStatus.INACTIVE && club.createdBy?.status === ENMembershipStatus.ENDED) return club;
+      if (club.status !== ENClubStatus.PENDING_VERIFICATION) throw new ConflictException('Only pending clubs can be rejected');
+      if (club.createdBy) {
+        await tx.membership.update({
+          where: { id: club.createdBy.id },
+          data: { status: ENMembershipStatus.ENDED, endedAt: this.timezoneService.nowUtc(), endReason: reason ?? 'Rejected by platform' },
+        });
+      }
+      const rejected = await tx.club.update({ where: { id: clubId }, data: { status: ENClubStatus.INACTIVE } });
+      await this.auditLogs.createLog({
+        category: ENFeature.CLUB,
+        action: 'club-rejected',
+        entityType: 'Club',
+        entityId: clubId,
+        doneById: platformAdminUserId,
+        result: ENAuditLogResult.SUCCESS,
+        metadata: { reason: reason ?? 'Rejected by platform' },
+      }, tx);
+      return rejected;
+    });
+  }
+
+  public async archiveExpiredPendingClubs(now = this.timezoneService.nowUtc()) {
+    const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const pending = await this.prisma.club.findMany({
+      where: { status: ENClubStatus.PENDING_VERIFICATION, createdAt: { lt: cutoff } },
+      select: { id: true, createdById: true },
+    });
+    let archived = 0;
+    for (const club of pending) {
+      await this.prisma.$transaction(async (tx) => {
+        const result = await tx.club.updateMany({
+          where: { id: club.id, status: ENClubStatus.PENDING_VERIFICATION },
+          data: { status: ENClubStatus.INACTIVE },
+        });
+        if (!result.count) return;
+        if (club.createdById) {
+          await tx.membership.updateMany({
+            where: { id: club.createdById, status: ENMembershipStatus.PENDING },
+            data: { status: ENMembershipStatus.ENDED, endedAt: now, endReason: 'Verification expired' },
+          });
+        }
+        await this.auditLogs.createLog({
+          category: ENFeature.CLUB,
+          action: 'club-verification-expired',
+          entityType: 'Club',
+          entityId: club.id,
+          metadata: { cutoff: cutoff.toISOString() },
+        }, tx);
+        archived += result.count;
+      });
+    }
+    this.logger.log(`Archived ${archived} expired pending club(s).`);
+    return archived;
+  }
+
+  private async requirePlatformAdmin(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { isPlatformAdmin: true } });
+    if (!user) throw new ResourceNotFoundException('User not found', 'user');
+    if (!user.isPlatformAdmin) throw new ForbiddenException('Platform administrator access required');
+  }
+
+  public async getClub(clubId: string) {
+    return this.prisma.club.findUnique({ where: { id: clubId } });
+  }
 }

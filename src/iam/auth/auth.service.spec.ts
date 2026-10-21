@@ -1,6 +1,7 @@
 import { ENGender, ENIdentifierType, ENUserTokenType } from '@prisma/client';
 import { AuthService } from './auth.service';
 import { hashPassword } from '@common/utils/password.util';
+import { computeTokenHash } from '@common/utils/token-hash.util';
 
 describe('AuthService authentication lifecycle', () => {
   const now = new Date('2026-10-21T12:00:00.000Z');
@@ -92,7 +93,6 @@ describe('AuthService authentication lifecycle', () => {
     const { service, prisma, tx } = createService();
     const secret = 'test-secret';
     const code = 'D77BA0';
-    const { computeTokenHash } = await import('@common/utils/token-hash.util');
     const identifier = {
       id: 'identifier-1',
       userId: 'user-1',
@@ -110,7 +110,7 @@ describe('AuthService authentication lifecycle', () => {
       status: 'PENDING',
       attempts: 0,
       usedAt: null,
-      expiresAt: new Date(now.getTime() + 10 * 60_000),
+      expiresAt: new Date(Date.now() + 10 * 60_000),
     });
 
     await expect(service.verifyIdentifier({ identifier: phone, code })).resolves.toEqual({

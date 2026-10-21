@@ -78,7 +78,7 @@ describe('application modules', () => {
 describe('application services', () => {
   it.each([
     ['AthleteService', () => new AthleteService()],
-    ['ClubService', () => new ClubService(mock, mock, mock)],
+    ['ClubService', () => new ClubService(mock, mock, mock, mock)],
     ['FeatureService', () => new FeatureService(mock, mock)],
     ['TimezoneService', () => new TimezoneService()],
     ['AuthService', () => new AuthService(mock, mock, mock, mock, mock, mock, mock)],
@@ -90,7 +90,7 @@ describe('application services', () => {
     ['AuditLogsService', () => new AuditLogsService(mock)],
     ['CommunicationService', () => new CommunicationService(mock, mock)],
     ['CloudinaryService', () => new CloudinaryService(mock)],
-    ['TasksService', () => new TasksService(mock, mock)],
+    ['TasksService', () => new TasksService(mock, mock, mock)],
     ['TeamService', () => new TeamService(mock)],
   ])('%s can be constructed', (_name, factory) => {
     expect(factory()).toBeDefined();
