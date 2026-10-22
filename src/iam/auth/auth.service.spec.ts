@@ -124,6 +124,94 @@ describe('AuthService authentication lifecycle', () => {
     });
   });
 
+  it('rejects expired verification tokens without consuming them', async () => {
+    const { service, prisma, tx } = createService();
+    const code = 'D77BA0';
+    const identifier = {
+      id: 'identifier-1',
+      userId: 'user-1',
+      type: ENIdentifierType.PHONE,
+      value: phone,
+      verifiedAt: null,
+    };
+    prisma.userIdentifier.findUnique.mockResolvedValue(identifier);
+    prisma.userToken.findFirst.mockResolvedValue({
+      id: 'token-1',
+      userId: 'user-1',
+      identifier,
+      type: ENUserTokenType.PHONE_VERIFICATION,
+      hash: computeTokenHash('test-secret', code),
+      status: 'PENDING',
+      attempts: 0,
+      usedAt: null,
+      expiresAt: new Date(now.getTime() - 1),
+    });
+
+    await expect(service.verifyIdentifier({ identifier: phone, code })).rejects.toThrow(
+      'Invalid or expired code',
+    );
+    expect(tx.userToken.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('disrupts a verification token after the fifth failed code attempt', async () => {
+    const { service, prisma } = createService();
+    const identifier = {
+      id: 'identifier-1',
+      userId: 'user-1',
+      type: ENIdentifierType.PHONE,
+      value: phone,
+      verifiedAt: null,
+    };
+    prisma.userIdentifier.findUnique.mockResolvedValue(identifier);
+    prisma.userToken.findFirst.mockResolvedValue({
+      id: 'token-1',
+      userId: 'user-1',
+      identifier,
+      type: ENUserTokenType.PHONE_VERIFICATION,
+      hash: computeTokenHash('test-secret', 'CORRECT'),
+      status: 'PENDING',
+      attempts: 4,
+      usedAt: null,
+      expiresAt: new Date(now.getTime() + 10 * 60_000),
+    });
+
+    await expect(
+      service.verifyIdentifier({ identifier: phone, code: 'WRONG1' }),
+    ).rejects.toThrow('Invalid or expired code');
+    expect(prisma.userToken.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'token-1', status: 'PENDING', usedAt: null },
+      data: { status: 'DISRUPTED' },
+    });
+  });
+
+  it('prevents concurrent or repeated consumption when the atomic claim loses', async () => {
+    const { service, prisma, tx } = createService();
+    tx.userToken.updateMany.mockResolvedValue({ count: 0 });
+    const token = 'one-time-token';
+    prisma.userToken.findUnique.mockResolvedValue({
+      id: 'token-1',
+      userId: 'user-1',
+      identifier: {
+        id: 'identifier-1',
+        userId: 'user-1',
+        type: ENIdentifierType.EMAIL,
+        value: 'person@example.com',
+        verifiedAt: null,
+      },
+      type: ENUserTokenType.EMAIL_VERIFICATION,
+      hash: computeTokenHash('test-secret', token),
+      status: 'PENDING',
+      attempts: 0,
+      usedAt: null,
+      expiresAt: new Date(now.getTime() + 10 * 60_000),
+    });
+
+    await expect(service.verifyIdentifier({ token })).rejects.toThrow(
+      'Invalid or expired code',
+    );
+    expect(tx.userIdentifier.updateMany).not.toHaveBeenCalled();
+  });
+
   it('issues a session only after a verified identifier and valid password', async () => {
     const { service, prisma, tx } = createService();
     const passwordHash = await hashPassword('correct-password');
