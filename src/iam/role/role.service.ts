@@ -9,12 +9,14 @@ import { parsePrismaError } from '@common/utils/error-handler';
 import { ENScopeType, Prisma } from '@prisma/client';
 import { ResourceNotFoundException } from '@common/exceptions/resource-not-found';
 import { CreateRoleDto, UpdateRoleDto } from './role.dto';
-import { UpdateClubDto } from '@clubs/club/club.dto';
+import { AuditLogsService } from '@infrastructure/audit-logs/audit-logs.service';
+import { ENFeature } from '@prisma/client';
 
 @Injectable()
 export class RoleService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   public async getRolesInClub(clubId: string) {
@@ -60,13 +62,22 @@ export class RoleService {
     const role = await this.prisma.role.findUnique({ where: { id: role_id } });
     if (!role) throw new ResourceNotFoundException('Role not found', 'role');
 
-    if (!role.isSystem)
-      if (role.clubId !== clubId)
-        throw new BadRequestException('Role does not belong to the club');
+    if (role.isSystem) throw new BadRequestException('System roles cannot be modified');
+    if (role.clubId !== clubId)
+      throw new BadRequestException('Role does not belong to the club');
 
     const updatedRole = await this.prisma.role.update({
       where: { id: role_id },
       data: { name, description },
+    });
+
+    await this.auditLogs.createLog({
+      category: ENFeature.ACCESS,
+      action: 'role-updated',
+      entityType: 'Role',
+      entityId: role_id,
+      doneById: user_id,
+      metadata: { club_id: clubId },
     });
 
     return updatedRole;
@@ -109,12 +120,13 @@ export class RoleService {
     const role = await this.prisma.role.findFirst({
       where: {
         code: roleCode,
+        isActive: true,
         OR: [{ clubId: adminMembership.clubId }, { isSystem: true }],
       },
     });
     if (!role) throw new ResourceNotFoundException('Role not found', 'role');
 
-    return await this.prisma.membershipRole.upsert({
+    const assignment = await this.prisma.membershipRole.upsert({
       where: {
         membershipId_roleId_scope_scopeId: {
           membershipId: targetMembershipId,
@@ -132,6 +144,15 @@ export class RoleService {
       },
       update: {},
     });
+    await this.auditLogs.createLog({
+      category: ENFeature.ACCESS,
+      action: 'role-assigned',
+      entityType: 'MembershipRole',
+      entityId: assignment.id,
+      doneById: user_id,
+      metadata: { membership_id: targetMembershipId, role_code: roleCode, scope, scope_id: scopeId },
+    });
+    return assignment;
   }
 
   public async revokeRole(
@@ -152,6 +173,9 @@ export class RoleService {
         'membership',
       );
 
+    if (targetMembership.clubId !== adminMembership.clubId)
+      throw new BadRequestException('Target membership does not belong to the same club');
+
     const role = await this.prisma.role.findFirst({
       where: {
         code: roleCode,
@@ -160,18 +184,25 @@ export class RoleService {
     });
     if (!role) throw new ResourceNotFoundException('Role not found', 'role');
 
-    if (!role.isSystem)
-      if (role.clubId !== adminMembership.clubId)
-        throw new BadRequestException('Role does not belong to the club');
+    if (!role.isSystem && role.clubId !== adminMembership.clubId)
+      throw new BadRequestException('Role does not belong to the club');
 
     try {
-      await this.prisma.membershipRole.deleteMany({
+      const result = await this.prisma.membershipRole.deleteMany({
         where: {
           membershipId: targetMembershipId,
           roleId: role.id,
           ...(scope ? { scope } : {}),
           ...(scopeId !== undefined ? { scopeId } : {}),
         },
+      });
+      await this.auditLogs.createLog({
+        category: ENFeature.ACCESS,
+        action: 'role-revoked',
+        entityType: 'MembershipRole',
+        entityId: targetMembershipId,
+        doneById: user_id,
+        metadata: { membership_id: targetMembershipId, role_code: roleCode, scope, scope_id: scopeId, count: result.count },
       });
       return true;
     } catch (error) {
@@ -204,6 +235,15 @@ export class RoleService {
       },
     });
 
+    await this.auditLogs.createLog({
+      category: ENFeature.ACCESS,
+      action: 'role-created',
+      entityType: 'Role',
+      entityId: role.id,
+      doneById: user_id,
+      metadata: { club_id: clubId, role_code: role.code },
+    });
+
     return role;
   }
 
@@ -219,6 +259,79 @@ export class RoleService {
 
     await this.prisma.role.delete({ where: { id: roleId } });
 
+    await this.auditLogs.createLog({
+      category: ENFeature.ACCESS,
+      action: 'role-deleted',
+      entityType: 'Role',
+      entityId: roleId,
+      doneById: user_id,
+      metadata: { club_id: clubId },
+    });
+
     return role;
+  }
+
+  public async retireRole(roleId: string, clubId: string, userId: string) {
+    const role = await this.prisma.role.findUnique({ where: { id: roleId } });
+    if (!role) throw new ResourceNotFoundException('Role not found', 'role');
+    if (role.isSystem) throw new BadRequestException('System roles cannot be retired');
+    if (role.clubId !== clubId) throw new BadRequestException('Role does not belong to the club');
+    if (!role.isActive) return role;
+
+    const retired = await this.prisma.role.update({
+      where: { id: roleId },
+      data: { isActive: false },
+    });
+    await this.auditLogs.createLog({
+      category: ENFeature.ACCESS,
+      action: 'role-retired',
+      entityType: 'Role',
+      entityId: roleId,
+      doneById: userId,
+      metadata: { club_id: clubId },
+    });
+    return retired;
+  }
+
+  public async assignPermission(roleId: string, permissionCode: string, clubId: string, userId: string) {
+    const role = await this.prisma.role.findUnique({ where: { id: roleId } });
+    if (!role) throw new ResourceNotFoundException('Role not found', 'role');
+    if (role.isSystem) throw new BadRequestException('System roles cannot be modified');
+    if (role.clubId !== clubId) throw new BadRequestException('Role does not belong to the club');
+    const permission = await this.prisma.permission.findUnique({ where: { code: permissionCode } });
+    if (!permission) throw new ResourceNotFoundException('Permission not found', 'permission');
+    const assignment = await this.prisma.rolePermission.upsert({
+      where: { roleId_permissionId: { roleId, permissionId: permission.id } },
+      create: { roleId, permissionId: permission.id },
+      update: {},
+    });
+    await this.auditLogs.createLog({
+      category: ENFeature.ACCESS,
+      action: 'role-permission-assigned',
+      entityType: 'RolePermission',
+      entityId: assignment.id,
+      doneById: userId,
+      metadata: { role_id: roleId, permission_code: permissionCode },
+    });
+    return assignment;
+  }
+
+  public async removePermission(roleId: string, permissionCode: string, clubId: string, userId: string) {
+    const role = await this.prisma.role.findUnique({ where: { id: roleId } });
+    if (!role) throw new ResourceNotFoundException('Role not found', 'role');
+    if (role.isSystem) throw new BadRequestException('System roles cannot be modified');
+    if (role.clubId !== clubId) throw new BadRequestException('Role does not belong to the club');
+    const permission = await this.prisma.permission.findUnique({ where: { code: permissionCode } });
+    if (!permission) throw new ResourceNotFoundException('Permission not found', 'permission');
+    const result = await this.prisma.rolePermission.deleteMany({ where: { roleId, permissionId: permission.id } });
+    await this.auditLogs.createLog({
+      category: ENFeature.ACCESS,
+      action: 'role-permission-removed',
+      entityType: 'RolePermission',
+      entityId: roleId,
+      doneById: userId,
+      metadata: { role_id: roleId, permission_code: permissionCode, count: result.count },
+    });
+    return result;
   }
 }

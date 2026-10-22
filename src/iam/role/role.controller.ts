@@ -8,6 +8,7 @@ import { PermissionsGuard } from '@common/guards/permissions.guard';
 import { RequirePermissions } from '@common/decorators/require-permissions.decorator';
 import { CurrentMembership, CurrentUser } from '@common/decorators/current-user';
 import { TUserJWTPayload } from '@iam/auth/strategy/jwt.strategy';
+import { GrantPermissionDto } from '@iam/permission/permission.dto';
 
 @Controller('roles')
 @UseGuards(PassportJwtGuard, EmailVerifiedGuard, ActiveMembershipGuard, PermissionsGuard)
@@ -42,6 +43,24 @@ export class RoleController {
   @RequirePermissions(true, ['ROLE_DELETE'])
   remove(@Param('roleId') roleId: string, @CurrentMembership() membership: TActiveMembershipPayload, @CurrentUser() user: TUserJWTPayload) {
     return this.roleService.deleteRole(roleId, membership.clubId, user.user_id);
+  }
+
+  @Patch(':roleId/retire')
+  @RequirePermissions(true, ['ROLE_DELETE'])
+  retire(@Param('roleId') roleId: string, @CurrentMembership() membership: TActiveMembershipPayload, @CurrentUser() user: TUserJWTPayload) {
+    return this.roleService.retireRole(roleId, membership.clubId, user.user_id);
+  }
+
+  @Post(':roleId/permissions')
+  @RequirePermissions(true, ['PERMISSION_ASSIGN'])
+  assignPermission(@Param('roleId') roleId: string, @Body() input: GrantPermissionDto, @CurrentMembership() membership: TActiveMembershipPayload, @CurrentUser() user: TUserJWTPayload) {
+    return this.roleService.assignPermission(roleId, input.permissionCode, membership.clubId, user.user_id);
+  }
+
+  @Delete(':roleId/permissions/:permissionCode')
+  @RequirePermissions(true, ['PERMISSION_REVOKE'])
+  removePermission(@Param('roleId') roleId: string, @Param('permissionCode') permissionCode: string, @CurrentMembership() membership: TActiveMembershipPayload, @CurrentUser() user: TUserJWTPayload) {
+    return this.roleService.removePermission(roleId, permissionCode, membership.clubId, user.user_id);
   }
 
   @Post('/memberships/:membershipId/assign')

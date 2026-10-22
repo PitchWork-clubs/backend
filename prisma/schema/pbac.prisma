@@ -36,6 +36,7 @@ model Role {
   description String  @db.VarChar(100)
 
   isSystem Boolean @default(true) @map("is_system")
+  isActive Boolean @default(true) @map("is_active")
 
   // timestamps
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)

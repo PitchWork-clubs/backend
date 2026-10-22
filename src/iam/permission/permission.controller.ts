@@ -19,10 +19,16 @@ export class PermissionController {
     return membership.membershipPermissions;
   }
 
+  @Get()
+  @RequirePermissions(true, ['PERMISSION_READ'])
+  list() {
+    return this.permissionService.listPermissions();
+  }
+
   @Post('memberships/:membershipId/grant')
   @RequirePermissions(true, ['PERMISSION_ASSIGN'])
-  grant(@Param('membershipId') membershipId: string, @Body() input: GrantPermissionDto, @CurrentMembership() membership: TActiveMembershipPayload) {
-    return this.permissionService.grantDirectPermission(membershipId, input.permissionCode, undefined, undefined, membership);
+  grant(@Param('membershipId') membershipId: string, @Body() input: GrantPermissionDto, @CurrentMembership() membership: TActiveMembershipPayload, @CurrentUser() user: TUserJWTPayload) {
+    return this.permissionService.grantDirectPermission(membershipId, input.permissionCode, undefined, undefined, membership, user.user_id);
   }
 
   @Post('memberships/:membershipId/revoke')
