@@ -54,15 +54,6 @@ describe('CryptoService', () => {
     expect(service.computeHash('value')).not.toBe(service.computeHash('other'));
   });
 
-  it('generates six-digit OTPs that match their hashes', () => {
-    const generated = service.generateOtp('user-id', 'EMAIL_VERIFICATION');
-
-    expect(generated.otp).toMatch(/^\d{6}$/);
-    expect(generated.hash).toBe(
-      service.hashOtp(generated.otp, 'user-id', 'EMAIL_VERIFICATION'),
-    );
-  });
-
   it('generates recovery codes that match their hashes', () => {
     const generated = service.generateRecoveryCodes('user-id');
 

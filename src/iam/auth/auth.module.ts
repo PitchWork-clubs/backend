@@ -7,7 +7,6 @@ import { PassportModule } from '@nestjs/passport';
 import { LocalStrategy } from './strategy/local.strategy';
 import { JwtStrategy } from './strategy/jwt.strategy';
 import { AuditLogsModule } from '@infrastructure/audit-logs/audit-logs.module';
-import { UserTokenModule } from '../user-token/user-token.module';
 import { EmailVerifiedGuard } from '@common/guards/email-verified.guard';
 import { CommunicationModule } from '@infrastructure/communication/communication.module';
 
@@ -28,7 +27,6 @@ import { CommunicationModule } from '@infrastructure/communication/communication
     }),
     PassportModule,
     AuditLogsModule,
-    UserTokenModule,
     CommunicationModule,
   ],
   controllers: [AuthController],

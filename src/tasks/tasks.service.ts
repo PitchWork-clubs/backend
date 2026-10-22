@@ -2,8 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '@infrastructure/prisma/prisma.service';
 import { TimezoneService } from '@common/timezone/timezone.service';
-import { ENUserTokenStatus, ENInvitationStatus } from '@prisma/client';
+import { ENInvitationStatus } from '@prisma/client';
 import { ClubService } from '@clubs/club/club.service';
+import { UserTokenService } from '@iam/user-token/user-token.service';
 
 @Injectable()
 export class TasksService {
@@ -13,6 +14,7 @@ export class TasksService {
     private readonly prisma: PrismaService,
     private readonly timezoneService: TimezoneService,
     private readonly clubService: ClubService,
+    private readonly userTokenService: UserTokenService,
   ) {}
 
   /**
@@ -23,15 +25,8 @@ export class TasksService {
   public async deleteExpiredUserTokens() {
     this.logger.log('Running task: deleteExpiredUserTokens...');
     try {
-      const result = await this.prisma.userToken.deleteMany({
-        where: {
-          OR: [
-            { expiresAt: { lt: this.timezoneService.nowUtc() } },
-            { status: ENUserTokenStatus.DISRUPTED },
-          ],
-        },
-      });
-      this.logger.log(`Deleted ${result.count} expired/disrupted user tokens.`);
+      const count = await this.userTokenService.deleteExpiredOrDisrupted();
+      this.logger.log(`Deleted ${count} expired/disrupted user tokens.`);
     } catch (error) {
       this.logger.error('Failed to delete expired user tokens:', error);
     }

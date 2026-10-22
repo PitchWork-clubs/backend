@@ -18,6 +18,8 @@ import { TimezoneService } from './common/timezone/timezone.service';
 import { AuthModule } from './iam/auth/auth.module';
 import { AuthController } from './iam/auth/auth.controller';
 import { AuthService } from './iam/auth/auth.service';
+import { UserTokenModule } from './iam/user-token/user-token.module';
+import { UserTokenService } from './iam/user-token/user-token.service';
 import { InvitationModule } from './iam/invitation/invitation.module';
 import { InvitationController } from './iam/invitation/invitation.controller';
 import { InvitationService } from './iam/invitation/invitation.service';
@@ -30,8 +32,6 @@ import { PermissionService } from './iam/permission/permission.service';
 import { RoleModule } from './iam/role/role.module';
 import { RoleResolver } from './iam/role/role.resolver';
 import { RoleService } from './iam/role/role.service';
-import { UserTokenModule } from './iam/user-token/user-token.module';
-import { UserTokenService } from './iam/user-token/user-token.service';
 import { AuditLogsModule } from './infrastructure/audit-logs/audit-logs.module';
 import { AuditLogsService } from './infrastructure/audit-logs/audit-logs.service';
 import { CommunicationModule } from './infrastructure/communication/communication.module';
@@ -57,11 +57,11 @@ describe('application modules', () => {
     CryptoModule,
     TimezoneModule,
     AuthModule,
+    UserTokenModule,
     InvitationModule,
     MembershipModule,
     PermissionModule,
     RoleModule,
-    UserTokenModule,
     AuditLogsModule,
     CommunicationModule,
     PrismaModule,
@@ -82,15 +82,15 @@ describe('application services', () => {
     ['FeatureService', () => new FeatureService(mock, mock)],
     ['TimezoneService', () => new TimezoneService()],
     ['AuthService', () => new AuthService(mock, mock, mock, mock, mock, mock, mock)],
+    ['UserTokenService', () => new UserTokenService(mock, mock)],
     ['InvitationService', () => new InvitationService(mock, mock, mock, mock, mock)],
     ['MembershipService', () => new MembershipService(mock, mock)],
     ['PermissionService', () => new PermissionService(mock, mock)],
     ['RoleService', () => new RoleService(mock, mock)],
-    ['UserTokenService', () => new UserTokenService(mock, mock, mock, mock)],
     ['AuditLogsService', () => new AuditLogsService(mock)],
     ['CommunicationService', () => new CommunicationService(mock, mock)],
     ['CloudinaryService', () => new CloudinaryService(mock)],
-    ['TasksService', () => new TasksService(mock, mock, mock)],
+    ['TasksService', () => new TasksService(mock, mock, mock, mock)],
     ['TeamService', () => new TeamService(mock)],
   ])('%s can be constructed', (_name, factory) => {
     expect(factory()).toBeDefined();
@@ -99,7 +99,7 @@ describe('application services', () => {
 
 describe('application controllers and resolvers', () => {
   it.each([
-    ['AuthController', () => new AuthController(mock, mock)],
+    ['AuthController', () => new AuthController(mock)],
     ['InvitationController', () => new InvitationController(mock)],
     ['AthleteResolver', () => new AthleteResolver(mock)],
     ['ClubResolver', () => new ClubResolver(mock)],

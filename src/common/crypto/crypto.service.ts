@@ -5,7 +5,6 @@ import {
   createDecipheriv,
   createHmac,
   randomBytes,
-  randomInt,
   timingSafeEqual,
 } from 'node:crypto';
 
@@ -13,7 +12,7 @@ import type { TEnv } from '../../config/env';
 
 /**
  * Handles AES-256-GCM encryption for 2FA TOTP secrets and
- * HMAC-SHA256 hashing for application tokens, OTPs, refresh tokens, and recovery codes.
+ * HMAC-SHA256 hashing for recovery codes and other security primitives.
  */
 @Injectable()
 export class CryptoService {
@@ -63,28 +62,6 @@ export class CryptoService {
   /** Compute HMAC-SHA256 hash of a raw string */
   computeHash(raw: string): string {
     return createHmac('sha256', this.hmacSecret).update(raw).digest('hex');
-  }
-
-  /** Generate random opaque application token (e.g. for email links, password reset) */
-  generateApplicationToken(): { token: string; hash: string } {
-    const token = randomBytes(32).toString('base64url');
-    const hash = this.computeHash(token);
-    return { token, hash };
-  }
-
-  /** Generate 6-digit OTP and its HMAC hash (bound to userId and type if provided) */
-  generateOtp(userId?: string, type?: string): { otp: string; hash: string } {
-    // 6-digit numeric OTP (e.g. "123456") using the OS CSPRNG.
-    const num = randomInt(100000, 1000000).toString();
-    const hashKey = userId && type ? `otp:${userId}:${type}:${num}` : num;
-    const hash = this.computeHash(hashKey);
-    return { otp: num, hash };
-  }
-
-  /** Compute OTP hash for lookup / verification */
-  hashOtp(otp: string, userId?: string, type?: string): string {
-    const hashKey = userId && type ? `otp:${userId}:${type}:${otp}` : otp;
-    return this.computeHash(hashKey);
   }
 
   /** Generate 10 single-use 2FA recovery codes formatted as 'xxxxx-xxxxx' */
