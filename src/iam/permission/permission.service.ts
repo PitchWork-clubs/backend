@@ -106,6 +106,12 @@ export class PermissionService {
     scope: ENScopeType = ENScopeType.CLUB,
     scopeId?: string,
   ) {
+    if (scope !== ENScopeType.CLUB || scopeId) {
+      throw new BadRequestException(
+        'Membership permission overrides are club-wide; use role assignments for scoped access.',
+      );
+    }
+
     const permission = await this.prisma.permission.findUnique({
       where: { code: permissionCode },
     });
@@ -133,18 +139,15 @@ export class PermissionService {
     scopeId?: string,
     adminMembership?: Membership,
   ) {
-    if (scope === ENScopeType.TEAM && !scopeId) {
-      throw new BadRequestException('A team is required for a TEAM-scoped override');
+    if (scope !== ENScopeType.CLUB || scopeId) {
+      throw new BadRequestException(
+        'Membership permission overrides are club-wide; use role assignments for scoped access.',
+      );
     }
-    if (scope !== ENScopeType.TEAM && scopeId) {
-      throw new BadRequestException('scopeId is only valid for a TEAM-scoped override');
-    }
-    if (!adminMembership || scope !== ENScopeType.TEAM) return;
+    if (!adminMembership) return;
     const target = await this.prisma.membership.findUnique({ where: { id: targetMembershipId } });
     if (!target || target.clubId !== adminMembership.clubId) {
       throw new BadRequestException('Target membership does not belong to the same club');
     }
-    const team = await this.prisma.team.findFirst({ where: { id: scopeId, clubId: adminMembership.clubId } });
-    if (!team) throw new BadRequestException('Team does not belong to the same club');
   }
 }

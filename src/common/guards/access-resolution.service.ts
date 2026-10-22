@@ -55,15 +55,12 @@ export class AccessResolutionService {
 
     for (const override of membership.membershipPermissions) {
       const code = override.permission.code;
-      const scope = { scope: override.scope, scopeId: override.scopeId };
       if (override.action === ENMembershipPermissionAction.REVOKE) {
-        const remaining = (permissionScopes.get(code) ?? []).filter(
-          (candidate) => candidate.scope !== scope.scope || candidate.scopeId !== scope.scopeId,
-        );
-        if (remaining.length) permissionScopes.set(code, remaining);
-        else permissionScopes.delete(code);
+        // Direct revocation is membership-wide. Role scopes cannot restore it.
+        permissionScopes.delete(code);
       } else {
-        this.addScope(permissionScopes, code, scope);
+        // Direct grants are membership-wide until scoped overrides are enabled.
+        permissionScopes.set(code, [{ scope: ENScopeType.CLUB, scopeId: '' }]);
       }
     }
 

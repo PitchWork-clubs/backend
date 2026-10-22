@@ -29,8 +29,8 @@ describe('AccessResolutionService', () => {
       membershipPermissions: [
         {
           action: ENMembershipPermissionAction.REVOKE,
-          scope: ENScopeType.TEAM,
-          scopeId: 'team-a',
+          scope: ENScopeType.CLUB,
+          scopeId: '',
           permission: { code: 'PLAYER_READ' },
         },
         {
@@ -42,9 +42,9 @@ describe('AccessResolutionService', () => {
       ],
     });
 
-    expect(result.effectivePermissions).toEqual(['PLAYER_READ', 'PLAYER_WRITE']);
+    expect(result.effectivePermissions).toEqual(['PLAYER_WRITE']);
     expect(result.accessContext.allows('PLAYER_READ', { teamId: 'team-a' })).toBe(false);
-    expect(result.accessContext.allows('PLAYER_READ', { teamId: 'team-b' })).toBe(true);
+    expect(result.accessContext.allows('PLAYER_READ', { teamId: 'team-b' })).toBe(false);
     expect(result.accessContext.allows('PLAYER_WRITE', { teamId: 'team-a' })).toBe(true);
   });
 

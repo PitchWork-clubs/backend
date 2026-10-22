@@ -1,6 +1,5 @@
 import { Field, InputType, Int, ObjectType } from '@nestjs/graphql';
-import { ENScopeType } from '@prisma/client';
-import { IsEnum, IsNotEmpty, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsNotEmpty, IsString, MaxLength, MinLength } from 'class-validator';
 
 @InputType()
 export class GrantPermissionInput {
@@ -11,15 +10,6 @@ export class GrantPermissionInput {
   @MaxLength(255)
   permissionCode!: string;
 
-  @Field(() => String, { nullable: true })
-  @IsOptional()
-  @IsEnum(ENScopeType)
-  scope?: ENScopeType;
-
-  @Field(() => String, { nullable: true })
-  @IsOptional()
-  @IsString()
-  scopeId?: string;
 }
 
 export { GrantPermissionInput as GrantPermissionDto };

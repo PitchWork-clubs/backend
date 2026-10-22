@@ -48,8 +48,8 @@ export class PermissionResolver {
     return this.permissionService.grantDirectPermission(
       targetMembershipId,
       input.permissionCode,
-      input.scope,
-      input.scopeId,
+      undefined,
+      undefined,
       currentMembership,
     );
   }
@@ -80,8 +80,8 @@ export class PermissionResolver {
       targetMembershipId,
       input.permissionCode,
       currentUser.user_id,
-      input.scope,
-      input.scopeId,
+      undefined,
+      undefined,
       currentMembership,
     );
     return true;

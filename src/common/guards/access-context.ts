@@ -69,6 +69,34 @@ export class AccessContext {
     }
   }
 
+  public allowsScope(
+    permissionCode: string,
+    requiredScope: ENScopeType,
+    target?: { teamId?: string | null; personId?: string | null },
+  ): boolean {
+    const scopes = this.permissionScopes.get(permissionCode) ?? [];
+    return scopes.some((scope) => {
+      if (scope.scope === ENScopeType.ANY) return true;
+      if (scope.scope === ENScopeType.CLUB) {
+        return requiredScope === ENScopeType.CLUB ||
+          requiredScope === ENScopeType.TEAM ||
+          requiredScope === ENScopeType.OWN ||
+          requiredScope === ENScopeType.RELATED;
+      }
+      if (scope.scope !== requiredScope) return false;
+      if (requiredScope === ENScopeType.TEAM) {
+        return Boolean(target?.teamId && scope.scopeId === target.teamId);
+      }
+      if (requiredScope === ENScopeType.OWN) {
+        return target?.personId === this.personId;
+      }
+      if (requiredScope === ENScopeType.RELATED) {
+        return Boolean(target?.personId && this.relatedPersonIds.includes(target.personId));
+      }
+      return true;
+    });
+  }
+
   /**
    * Return a summary of granted scopes for building database queries.
    */

@@ -3,6 +3,7 @@ import { PrismaService } from '@infrastructure/prisma/prisma.service';
 import { TActiveMembershipPayload } from '@common/guards/active-membership.guard';
 import { Club } from '@prisma/client';
 import { ResourceNotFoundException } from '@common/exceptions/resource-not-found';
+import { AccessContext } from '@common/guards/access-context';
 
 @Injectable()
 export class TeamService {
@@ -32,17 +33,28 @@ export class TeamService {
     return team;
   }
 
-  public async getTeamList(adminMembership: TActiveMembershipPayload) {
+  public async getTeamList(
+    adminMembership: TActiveMembershipPayload,
+    accessContext?: AccessContext,
+  ) {
     const club: Club = adminMembership.club;
+    const summary = accessContext?.summary('TEAM_READ');
     return await this.prisma.team.findMany({
-      where: { clubId: club.id },
+      where: {
+        clubId: club.id,
+        ...(summary && !summary.hasClubWide
+          ? { id: { in: summary.teamIds } }
+          : {}),
+      },
     });
   }
 
   public async getTeamById(
     adminMembership: TActiveMembershipPayload,
     teamId: string,
+    accessContext?: AccessContext,
   ) {
+    accessContext?.ensure('TEAM_READ', { teamId });
     const club: Club = adminMembership.club;
     const team = await this.prisma.team.findFirst({
       where: { id: teamId, clubId: club.id },
@@ -58,7 +70,9 @@ export class TeamService {
     teamId: string,
     teamName: string,
     user_id: string,
+    accessContext?: AccessContext,
   ) {
+    accessContext?.ensure('TEAM_WRITE', { teamId });
     const club: Club = adminMembership.club;
     const existingTeam = await this.prisma.team.findFirst({
       where: { id: teamId, clubId: club.id },
