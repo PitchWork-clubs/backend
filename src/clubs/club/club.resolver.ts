@@ -2,7 +2,7 @@ import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
 import { UseGuards, UseInterceptors } from '@nestjs/common';
 import { ClubService } from './club.service';
 import { Club } from '@generated/prisma-nestjs-graphql/club/club.model';
-import { CreateClubInput, UpdateClubInput } from './club.dto';
+import { CreateClubInput, RejectClubInput, UpdateClubInput } from './club.dto';
 import { PassportJwtGuard } from '@common/guards/passport.guard';
 import { EmailVerifiedGuard } from '@common/guards/email-verified.guard';
 import {
@@ -78,10 +78,10 @@ export class ClubResolver {
   @Mutation(() => Club, { name: 'rejectClub' })
   async rejectClub(
     @Args('clubId') clubId: string,
-    @Args('reason', { nullable: true }) reason: string | undefined,
+    @Args('input', { type: () => RejectClubInput }) input: RejectClubInput,
     @CurrentUser() currentUser: TUserJWTPayload,
   ) {
-    return this.clubService.rejectClub(clubId, currentUser.user_id, reason);
+    return this.clubService.rejectClub(clubId, currentUser.user_id, input?.reason);
   }
 
   @Mutation(() => Boolean, { name: 'archiveClub' })
