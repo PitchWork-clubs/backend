@@ -13,18 +13,34 @@ import {
 import { PrismaService } from '@infrastructure/prisma/prisma.service';
 import { TActiveMembershipPayload } from '@common/guards/active-membership.guard';
 import { TimezoneService } from '@common/timezone/timezone.service';
+import { AuditLogsService } from '@infrastructure/audit-logs/audit-logs.service';
+import { ENFeature } from '@prisma/client';
+import { UpdateMembershipDto } from './membership.dto';
 
 @Injectable()
 export class MembershipService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly timezoneService: TimezoneService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   public async listMemberships(clubId: string) {
     return this.prisma.membership.findMany({
       where: { clubId },
       include: { person: true, types: true, membershipRoles: { include: { role: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  public async listMyMemberships(personId: string) {
+    return this.prisma.membership.findMany({
+      where: { personId },
+      include: {
+        club: true,
+        types: true,
+        membershipRoles: { include: { role: true } },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -47,6 +63,7 @@ export class MembershipService {
     personId: string,
     clubId: string,
     types: ENMembershipType[],
+    actorUserId = 'system',
   ) {
     const uniqueTypes = [...new Set(types)];
     if (uniqueTypes.length === 0) {
@@ -98,6 +115,17 @@ export class MembershipService {
           include: { types: true },
         });
 
+        await this.auditLogs.createLog(
+          {
+            category: ENFeature.ACCESS,
+            action: 'membership-created',
+            entityType: 'Membership',
+            entityId: createdMembership.id,
+            doneById: actorUserId,
+            metadata: { club_id: clubId, person_id: personId, types: uniqueTypes },
+          },
+          tx,
+        );
         return createdMembership;
       });
     } catch (error) {
@@ -105,9 +133,81 @@ export class MembershipService {
     }
   }
 
+  public async updateMembership(
+    membershipId: string,
+    clubId: string,
+    input: UpdateMembershipDto,
+    actorUserId: string,
+  ) {
+    const membership = await this.prisma.membership.findFirst({
+      where: { id: membershipId, clubId },
+      include: { types: true },
+    });
+    if (!membership) {
+      throw new ResourceNotFoundException('Membership not found', 'Membership');
+    }
+
+    const uniqueTypes = input.types ? [...new Set(input.types)] : undefined;
+    if (uniqueTypes && (uniqueTypes.length === 0 || uniqueTypes.length !== input.types!.length)) {
+      throw new ConflictException('Membership types must be unique and non-empty.');
+    }
+
+    if (input.status === ENMembershipStatus.ACTIVE && membership.status === ENMembershipStatus.ENDED) {
+      throw new ConflictException('Ended memberships cannot be reactivated.');
+    }
+    if (input.status === membership.status && input.types === undefined && input.endReason === undefined) {
+      throw new ConflictException('Membership has no changes.');
+    }
+
+    const now = this.timezoneService.nowUtc();
+    try {
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const result = await tx.membership.update({
+          where: { id: membershipId },
+          data: {
+            ...(input.status ? {
+              status: input.status,
+              endedAt: input.status === ENMembershipStatus.ENDED ? now : null,
+            } : {}),
+            ...(input.endReason !== undefined ? { endReason: input.endReason } : {}),
+            ...(uniqueTypes ? {
+              types: {
+                deleteMany: {},
+                create: uniqueTypes.map((type) => ({ type })),
+              },
+            } : {}),
+          },
+          include: { types: true },
+        });
+        await this.auditLogs.createLog(
+          {
+            category: ENFeature.ACCESS,
+            action: 'membership-updated',
+            entityType: 'Membership',
+            entityId: membershipId,
+            doneById: actorUserId,
+            metadata: {
+              club_id: clubId,
+              previous_status: membership.status,
+              status: input.status,
+              types: uniqueTypes,
+            },
+          },
+          tx,
+        );
+        return result;
+      });
+      return updated;
+    } catch (error) {
+      if (error instanceof ConflictException) throw error;
+      throw new InternalServerErrorException(parsePrismaError(error));
+    }
+  }
+
   public async endMembership(
     membershipId: string,
     actingMembership: TActiveMembershipPayload,
+    actorUserId = 'system',
   ) {
     const targetMembership = await this.prisma.membership.findUnique({
       where: { id: membershipId },
@@ -139,6 +239,18 @@ export class MembershipService {
           },
           include: { types: true },
         });
+
+        await this.auditLogs.createLog(
+          {
+            category: ENFeature.ACCESS,
+            action: 'membership-ended',
+            entityType: 'Membership',
+            entityId: membershipId,
+            doneById: actorUserId,
+            metadata: { club_id: actingMembership.clubId },
+          },
+          tx,
+        );
 
         return endedMembership;
       });

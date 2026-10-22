@@ -72,6 +72,26 @@ export class CreateMembershipInput {
 
 export { CreateMembershipInput as CreateMembershipDto };
 
+@InputType()
+export class UpdateMembershipInput {
+  @Field(() => [GqlENMembershipType], { nullable: true })
+  @IsEnum(ENMembershipType, { each: true })
+  @IsOptional()
+  types?: ENMembershipType[];
+
+  @Field(() => GqlENMembershipStatus, { nullable: true })
+  @IsEnum(ENMembershipStatus)
+  @IsOptional()
+  status?: ENMembershipStatus;
+
+  @Field(() => String, { nullable: true })
+  @IsString()
+  @IsOptional()
+  endReason?: string;
+}
+
+export { UpdateMembershipInput as UpdateMembershipDto };
+
 @ObjectType()
 export class InvitationResponse {
   @Field(() => Boolean)

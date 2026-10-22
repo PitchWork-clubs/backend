@@ -27,7 +27,11 @@ describe('MembershipService lifecycle', () => {
       $transaction: jest.fn(async (callback: (value: any) => unknown) => callback(tx)),
     };
     const timezone = { nowUtc: jest.fn().mockReturnValue(now) };
-    const service = new MembershipService(prisma as any, timezone as any);
+    const service = new MembershipService(
+      prisma as any,
+      timezone as any,
+      { createLog: jest.fn() } as any,
+    );
     return { service, prisma, tx, timezone };
   }
 
@@ -81,5 +85,24 @@ describe('MembershipService lifecycle', () => {
       ),
     ).rejects.toThrow('types must be unique');
     expect(prisma.person.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('does not reactivate an ended membership', async () => {
+    const { service, prisma } = createService();
+    prisma.membership.findFirst.mockResolvedValue({
+      id: 'membership-1',
+      clubId: 'club-1',
+      status: ENMembershipStatus.ENDED,
+      types: [{ type: ENMembershipType.STAFF }],
+    });
+
+    await expect(
+      service.updateMembership(
+        'membership-1',
+        'club-1',
+        { status: ENMembershipStatus.ACTIVE },
+        'user-1',
+      ),
+    ).rejects.toThrow('Ended memberships cannot be reactivated');
   });
 });
