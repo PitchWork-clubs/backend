@@ -16,13 +16,13 @@ export interface IAccessResolutionMembership {
   membershipRoles: Array<{
     scope: ENScopeType;
     scopeId: string | null;
-    role: { permissions: Array<{ permission: { code: string } }> };
+    role: { permissions: Array<{ permission: { code: string; module: ENFeature } }> };
   }>;
   membershipPermissions: Array<{
     action: ENMembershipPermissionAction;
     scope: ENScopeType;
     scopeId: string;
-    permission: { code: string };
+    permission: { code: string; module: ENFeature };
   }>;
   person: { relatedPersonLinks?: Array<{ personId: string }> };
 }
@@ -43,9 +43,11 @@ export class AccessResolutionService {
       throw new ForbiddenException('Club is not active.');
     }
 
+    const enabledFeatures = new Set(await this.getEnabledFeatures(membership.clubId));
     const permissionScopes = new Map<string, IPermissionScope[]>();
     for (const assignment of membership.membershipRoles) {
       for (const rolePermission of assignment.role.permissions) {
+        if (!enabledFeatures.has(rolePermission.permission.module)) continue;
         this.addScope(permissionScopes, rolePermission.permission.code, {
           scope: assignment.scope,
           scopeId: assignment.scopeId,
@@ -55,6 +57,7 @@ export class AccessResolutionService {
 
     for (const override of membership.membershipPermissions) {
       const code = override.permission.code;
+      if (!enabledFeatures.has(override.permission.module)) continue;
       if (override.action === ENMembershipPermissionAction.REVOKE) {
         // Direct revocation is membership-wide. Role scopes cannot restore it.
         permissionScopes.delete(code);
@@ -65,7 +68,6 @@ export class AccessResolutionService {
     }
 
     const relatedPersonIds = membership.person.relatedPersonLinks?.map((link) => link.personId) ?? [];
-    const enabledFeatures = await this.getEnabledFeatures(membership.clubId);
     return {
       effectivePermissions: Array.from(permissionScopes.keys()),
       permissionScopes,
@@ -76,7 +78,7 @@ export class AccessResolutionService {
         permissionScopes,
         relatedPersonIds,
       ),
-      enabledFeatures,
+      enabledFeatures: Array.from(enabledFeatures),
     };
   }
 

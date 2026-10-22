@@ -22,7 +22,10 @@ export class RoleService {
   public async getRolesInClub(clubId: string) {
     return await this.prisma.role.findMany({
       where: {
-        OR: [{ isSystem: true }, { clubId, isSystem: false }],
+        OR: [
+          { isSystem: true, clubId: null },
+          { clubId, isSystem: false },
+        ],
       },
     });
   }
@@ -39,6 +42,8 @@ export class RoleService {
 
     if (!role) throw new ResourceNotFoundException('Role not found', 'role');
 
+    if (role.isSystem && role.clubId !== null)
+      throw new BadRequestException('System roles must be global');
     if (!role.isSystem && role.clubId !== clubId)
       throw new BadRequestException('Role does not belong to the club');
 
@@ -119,9 +124,12 @@ export class RoleService {
 
     const role = await this.prisma.role.findFirst({
       where: {
-        code: roleCode,
+        code: roleCode.trim().toUpperCase(),
         isActive: true,
-        OR: [{ clubId: adminMembership.clubId }, { isSystem: true }],
+        OR: [
+          { clubId: adminMembership.clubId, isSystem: false },
+          { isSystem: true, clubId: null },
+        ],
       },
     });
     if (!role) throw new ResourceNotFoundException('Role not found', 'role');
@@ -150,7 +158,7 @@ export class RoleService {
       entityType: 'MembershipRole',
       entityId: assignment.id,
       doneById: user_id,
-      metadata: { membership_id: targetMembershipId, role_code: roleCode, scope, scope_id: scopeId },
+      metadata: { membership_id: targetMembershipId, role_code: role.code, scope, scope_id: scopeId },
     });
     return assignment;
   }
@@ -178,8 +186,11 @@ export class RoleService {
 
     const role = await this.prisma.role.findFirst({
       where: {
-        code: roleCode,
-        OR: [{ clubId: adminMembership.clubId }, { isSystem: true }],
+        code: roleCode.trim().toUpperCase(),
+        OR: [
+          { clubId: adminMembership.clubId, isSystem: false },
+          { isSystem: true, clubId: null },
+        ],
       },
     });
     if (!role) throw new ResourceNotFoundException('Role not found', 'role');
@@ -202,7 +213,7 @@ export class RoleService {
         entityType: 'MembershipRole',
         entityId: targetMembershipId,
         doneById: user_id,
-        metadata: { membership_id: targetMembershipId, role_code: roleCode, scope, scope_id: scopeId, count: result.count },
+      metadata: { membership_id: targetMembershipId, role_code: role.code, scope, scope_id: scopeId, count: result.count },
       });
       return true;
     } catch (error) {
@@ -216,10 +227,14 @@ export class RoleService {
     user_id: string,
   ) {
     const { roleCode, name, description } = data;
+    const normalizedCode = roleCode.trim().toUpperCase();
     const existingRole = await this.prisma.role.findFirst({
       where: {
-        code: roleCode,
-        OR: [{ clubId }, { isSystem: true }],
+        code: normalizedCode,
+        OR: [
+          { clubId, isSystem: false },
+          { isSystem: true, clubId: null },
+        ],
       },
     });
     if (existingRole)
@@ -227,7 +242,7 @@ export class RoleService {
 
     const role = await this.prisma.role.create({
       data: {
-        code: roleCode,
+        code: normalizedCode,
         name,
         clubId,
         description,

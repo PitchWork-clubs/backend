@@ -31,9 +31,9 @@ model Permission {
 model Role {
   id String @id @default(cuid())
 
-  code        String @db.VarChar(10) //
-  name        String  @db.VarChar(10)
-  description String  @db.VarChar(100)
+  code        String @db.VarChar(50)
+  name        String  @db.VarChar(100)
+  description String  @db.VarChar(500)
 
   isSystem Boolean @default(true) @map("is_system")
   isActive Boolean @default(true) @map("is_active")
