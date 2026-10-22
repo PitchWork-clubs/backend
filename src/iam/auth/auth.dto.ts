@@ -167,6 +167,24 @@ export class ResendVerificationDto {
   identifier!: string;
 }
 
+/** Compatibility DTOs for the legacy email-specific routes. */
+export class SendVerifyEmailDto {
+  @Transform(({ value }: { value: string | undefined }) =>
+    value?.trim().toLowerCase(),
+  )
+  @IsEmail()
+  email!: string;
+}
+
+export class VerifyEmailDto {
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
+  @IsString()
+  @MinLength(6)
+  token!: string;
+}
+
 export class RefreshTokenDto {
   @IsOptional()
   @IsString()

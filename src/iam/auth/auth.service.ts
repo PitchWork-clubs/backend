@@ -297,10 +297,18 @@ export class AuthService {
       : ENIdentifierType.PHONE;
   }
 
+  private normalizeIdentifier(value: string): string {
+    const normalized = value.trim();
+    return normalized.includes('@') ? normalized.toLowerCase() : normalized;
+  }
+
   public async verifyIdentifier(dto: VerifyIdentifierDto) {
     const secret = this.configService.getOrThrow<string>('TOKEN_HASH_SECRET');
     const submittedToken = dto.token?.trim();
     const submittedCode = dto.code?.trim().toUpperCase();
+    const identifierValue = dto.identifier
+      ? this.normalizeIdentifier(dto.identifier)
+      : undefined;
     let token: any;
 
     if (submittedToken) {
@@ -308,12 +316,12 @@ export class AuthService {
         where: { hash: computeTokenHash(secret, submittedToken) },
         include: { identifier: true },
       });
-    } else if (dto.identifier && submittedCode) {
+    } else if (identifierValue && submittedCode) {
       const identifier = await this.prisma.userIdentifier.findUnique({
         where: {
           type_value: {
-            type: this.identifierType(dto.identifier),
-            value: dto.identifier,
+            type: this.identifierType(identifierValue),
+            value: identifierValue,
           },
         },
       });
@@ -413,7 +421,9 @@ export class AuthService {
   }
 
   public async resendVerification(dto: ResendVerificationDto) {
-    const identifierValue = dto.identifier?.trim();
+    const identifierValue = dto.identifier
+      ? this.normalizeIdentifier(dto.identifier)
+      : undefined;
     if (!identifierValue) return { message: this.resendMessage };
 
     const type = this.identifierType(identifierValue);

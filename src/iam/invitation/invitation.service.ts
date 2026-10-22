@@ -259,7 +259,10 @@ export class InvitationService {
         if (invitation.type === ENMembershipType.ATHLETE) {
           await tx.athlete.create({ data: { membershipId: membership.id, clubId: invitation.inviter.clubId } });
         }
-        await tx.invitation.update({ where: { id: invitation.id }, data: { acceptedAt: now } });
+        await tx.invitation.update({
+          where: { id: invitation.id },
+          data: { acceptedAt: now, status: ENInvitationStatus.ACCEPTED },
+        });
         await this.auditLogsService.createLog({
           category: ENFeature.ACCESS,
           action: 'INVITATION_ACCEPTED',

@@ -1,12 +1,12 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { MembershipService } from './membership.service';
-import { CreateMembershipDto } from './membership.dto';
+import { CreateMembershipDto, UpdateMembershipDto } from './membership.dto';
 import { PassportJwtGuard } from '@common/guards/passport.guard';
 import { EmailVerifiedGuard } from '@common/guards/email-verified.guard';
 import { ActiveMembershipGuard, TActiveMembershipPayload } from '@common/guards/active-membership.guard';
 import { PermissionsGuard } from '@common/guards/permissions.guard';
 import { RequirePermissions } from '@common/decorators/require-permissions.decorator';
-import { CurrentMembership } from '@common/decorators/current-user';
+import { CurrentMembership, CurrentUser } from '@common/decorators/current-user';
 
 @Controller('memberships')
 @UseGuards(PassportJwtGuard, EmailVerifiedGuard, ActiveMembershipGuard, PermissionsGuard)
@@ -16,6 +16,11 @@ export class MembershipController {
   @Get('me')
   getMine(@CurrentMembership() membership: TActiveMembershipPayload) {
     return membership;
+  }
+
+  @Get('mine')
+  listMine(@CurrentMembership() membership: TActiveMembershipPayload) {
+    return this.membershipService.listMyMemberships(membership.personId);
   }
 
   @Get()
@@ -38,8 +43,14 @@ export class MembershipController {
   create(
     @Body() input: CreateMembershipDto,
     @CurrentMembership() membership: TActiveMembershipPayload,
+    @CurrentUser() user: { user_id: string },
   ) {
-    return this.membershipService.createMembership(input.personId, membership.clubId, input.types);
+    return this.membershipService.createMembership(
+      input.personId,
+      membership.clubId,
+      input.types,
+      user.user_id,
+    );
   }
 
   @Post(':membershipId/end')
@@ -47,7 +58,24 @@ export class MembershipController {
   end(
     @Param('membershipId') membershipId: string,
     @CurrentMembership() membership: TActiveMembershipPayload,
+    @CurrentUser() user: { user_id: string },
   ) {
-    return this.membershipService.endMembership(membershipId, membership);
+    return this.membershipService.endMembership(membershipId, membership, user.user_id);
+  }
+
+  @Patch(':membershipId')
+  @RequirePermissions(true, ['MEMBERSHIP_WRITE'])
+  update(
+    @Param('membershipId') membershipId: string,
+    @Body() input: UpdateMembershipDto,
+    @CurrentMembership() membership: TActiveMembershipPayload,
+    @CurrentUser() user: { user_id: string },
+  ) {
+    return this.membershipService.updateMembership(
+      membershipId,
+      membership.clubId,
+      input,
+      user.user_id,
+    );
   }
 }

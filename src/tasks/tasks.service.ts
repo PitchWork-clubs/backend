@@ -2,8 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '@infrastructure/prisma/prisma.service';
 import { TimezoneService } from '@common/timezone/timezone.service';
-import { ENUserTokenStatus, ENInvitationStatus } from '@prisma/client';
+import { ENAuditLogResult, ENFeature, ENInvitationStatus } from '@prisma/client';
 import { ClubService } from '@clubs/club/club.service';
+import { UserTokenService } from '@iam/user-token/user-token.service';
+import { AuditLogsService } from '@infrastructure/audit-logs/audit-logs.service';
 
 @Injectable()
 export class TasksService {
@@ -13,6 +15,8 @@ export class TasksService {
     private readonly prisma: PrismaService,
     private readonly timezoneService: TimezoneService,
     private readonly clubService: ClubService,
+    private readonly userTokenService: UserTokenService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
 
   /**
@@ -23,15 +27,15 @@ export class TasksService {
   public async deleteExpiredUserTokens() {
     this.logger.log('Running task: deleteExpiredUserTokens...');
     try {
-      const result = await this.prisma.userToken.deleteMany({
-        where: {
-          OR: [
-            { expiresAt: { lt: this.timezoneService.nowUtc() } },
-            { status: ENUserTokenStatus.DISRUPTED },
-          ],
-        },
+      const count = await this.userTokenService.deleteExpiredOrDisrupted();
+      await this.auditLogs.createLog({
+        category: ENFeature.ACCESS,
+        action: 'USER_TOKEN_CLEANUP',
+        entityType: 'UserToken',
+        result: ENAuditLogResult.SUCCESS,
+        metadata: { deleted_count: count },
       });
-      this.logger.log(`Deleted ${result.count} expired/disrupted user tokens.`);
+      this.logger.log(`Deleted ${count} expired/disrupted user tokens.`);
     } catch (error) {
       this.logger.error('Failed to delete expired user tokens:', error);
     }
@@ -62,6 +66,13 @@ export class TasksService {
             { status: ENInvitationStatus.DISRUPTED },
           ],
         },
+      });
+      await this.auditLogs.createLog({
+        category: ENFeature.ACCESS,
+        action: 'INVITATION_CLEANUP',
+        entityType: 'Invitation',
+        result: ENAuditLogResult.SUCCESS,
+        metadata: { deleted_count: result.count },
       });
       this.logger.log(`Deleted ${result.count} expired/disrupted invitations.`);
     } catch (error) {
@@ -117,6 +128,14 @@ export class TasksService {
           where: { id: { in: personIds } },
         }),
       ]);
+
+      await this.auditLogs.createLog({
+        category: ENFeature.ACCESS,
+        action: 'UNVERIFIED_ACCOUNT_CLEANUP',
+        entityType: 'User',
+        result: ENAuditLogResult.SUCCESS,
+        metadata: { deleted_count: userIds.length },
+      });
 
       this.logger.log(
         `Successfully purged ${userIds.length} unverified account(s).`,

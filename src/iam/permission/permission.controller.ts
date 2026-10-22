@@ -19,15 +19,21 @@ export class PermissionController {
     return membership.membershipPermissions;
   }
 
+  @Get()
+  @RequirePermissions(true, ['PERMISSION_READ'])
+  list() {
+    return this.permissionService.listPermissions();
+  }
+
   @Post('memberships/:membershipId/grant')
   @RequirePermissions(true, ['PERMISSION_ASSIGN'])
-  grant(@Param('membershipId') membershipId: string, @Body() input: GrantPermissionDto, @CurrentMembership() membership: TActiveMembershipPayload) {
-    return this.permissionService.grantDirectPermission(membershipId, input.permissionCode, input.scope, input.scopeId, membership);
+  grant(@Param('membershipId') membershipId: string, @Body() input: GrantPermissionDto, @CurrentMembership() membership: TActiveMembershipPayload, @CurrentUser() user: TUserJWTPayload) {
+    return this.permissionService.grantDirectPermission(membershipId, input.permissionCode, undefined, undefined, membership, user.user_id);
   }
 
   @Post('memberships/:membershipId/revoke')
   @RequirePermissions(true, ['PERMISSION_REVOKE'])
   revoke(@Param('membershipId') membershipId: string, @Body() input: RevokePermissionDto, @CurrentMembership() membership: TActiveMembershipPayload, @CurrentUser() user: TUserJWTPayload) {
-    return this.permissionService.revokeDirectPermission(membershipId, input.permissionCode, user.user_id, input.scope, input.scopeId, membership);
+    return this.permissionService.revokeDirectPermission(membershipId, input.permissionCode, user.user_id, undefined, undefined, membership);
   }
 }

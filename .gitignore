@@ -94,6 +94,9 @@ docs/
 .vscode/
 .kiro/
 
+## agents
+.codex/
+
 ## Personal notes & todos
 todo*.md
 

@@ -6,6 +6,6 @@ export class LogSmsProvider implements ISmsProvider {
   private readonly logger = new Logger(LogSmsProvider.name);
 
   async sendSms(to: string, body: string): Promise<void> {
-    this.logger.log(`SMS MOCK | to=${to} | body=${body}`);
+    this.logger.log(`SMS MOCK | to=${to}`);
   }
 }

@@ -44,13 +44,15 @@ export class PermissionResolver {
     @Args('membershipId') targetMembershipId: string,
     @Args('input') input: GrantPermissionInput,
     @CurrentMembership() currentMembership: TActiveMembershipPayload,
+    @CurrentUser() currentUser: TUserJWTPayload,
   ) {
     return this.permissionService.grantDirectPermission(
       targetMembershipId,
       input.permissionCode,
-      input.scope,
-      input.scopeId,
+      undefined,
+      undefined,
       currentMembership,
+      currentUser.user_id,
     );
   }
 
@@ -80,8 +82,8 @@ export class PermissionResolver {
       targetMembershipId,
       input.permissionCode,
       currentUser.user_id,
-      input.scope,
-      input.scopeId,
+      undefined,
+      undefined,
       currentMembership,
     );
     return true;

@@ -23,25 +23,21 @@ import {
   RegisterUserPersonDto,
   RefreshTokenDto,
   ResendVerificationDto,
+  SendVerifyEmailDto,
   TwoFactorCodeDto,
   TwoFactorLoginDto,
   VerifyIdentifierDto,
+  VerifyEmailDto,
 } from './auth.dto';
 import { Request, Response } from 'express';
 import { PassportJwtGuard } from '@common/guards/passport.guard';
 import { CurrentUser } from '@common/decorators/current-user';
 import { TPayload, TUserData } from './auth.types';
-import { UserTokenService } from '../user-token/user-token.service';
-import {
-  SendVerifyEmailDto,
-  VerifyEmailDto,
-} from '../user-token/user-token.dto';
 
 @Controller('auth')
 export class AuthController {
   constructor(
     private authService: AuthService,
-    private userTokenService: UserTokenService,
   ) {}
 
   @HttpCode(HttpStatus.CREATED)
@@ -213,7 +209,9 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @Post('email/send-verify')
   public async sendVerifyEmail(@Body() data: SendVerifyEmailDto) {
-    return await this.userTokenService.sendVerifyEmail(data.email);
+    return await this.authService.resendVerification({
+      identifier: data.email,
+    });
   }
 
   @HttpCode(HttpStatus.OK)

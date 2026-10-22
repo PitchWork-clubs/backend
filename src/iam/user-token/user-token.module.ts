@@ -1,11 +1,10 @@
 import { Module } from '@nestjs/common';
+import { PrismaModule } from '@infrastructure/prisma/prisma.module';
+import { TimezoneModule } from '@common/timezone/timezone.module';
 import { UserTokenService } from './user-token.service';
-import { AuditLogsModule } from '@infrastructure/audit-logs/audit-logs.module';
-import { CommunicationModule } from '@infrastructure/communication/communication.module';
-import { ConfigModule } from '@nestjs/config';
 
 @Module({
-  imports: [ConfigModule, CommunicationModule, AuditLogsModule],
+  imports: [PrismaModule, TimezoneModule],
   providers: [UserTokenService],
   exports: [UserTokenService],
 })

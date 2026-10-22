@@ -3,12 +3,21 @@ import { ENScopeType, Membership } from '@prisma/client';
 import { ResourceNotFoundException } from '@common/exceptions/resource-not-found';
 import { PrismaService } from '@infrastructure/prisma/prisma.service';
 import { TActiveMembershipPayload } from '@common/guards/active-membership.guard';
+import { AuditLogsService } from '@infrastructure/audit-logs/audit-logs.service';
+import { ENFeature } from '@prisma/client';
 
 @Injectable()
 export class PermissionService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly auditLogs: AuditLogsService,
   ) {}
+
+  public async listPermissions() {
+    return this.prisma.permission.findMany({
+      orderBy: [{ module: 'asc' }, { code: 'asc' }],
+    });
+  }
 
   private async membershipAllData(membershipId: string) {}
 
@@ -23,6 +32,7 @@ export class PermissionService {
     scope: ENScopeType = ENScopeType.CLUB,
     scopeId?: string,
     adminMembership?: Membership,
+    userId?: string,
   ) {
     const permission = await this.prisma.permission.findUnique({
       where: { code: permissionCode },
@@ -36,7 +46,7 @@ export class PermissionService {
     }
 
     await this.validateScope(targetMembershipId, scope, scopeId, adminMembership);
-    return (this.prisma.membershipPermission.upsert as any)({
+    const override = await (this.prisma.membershipPermission.upsert as any)({
       where: {
         membershipId_permissionId_scope_scopeId: {
           membershipId: targetMembershipId,
@@ -56,6 +66,15 @@ export class PermissionService {
         action: 'GRANT',
       },
     });
+    await this.auditLogs.createLog({
+      category: ENFeature.ACCESS,
+      action: 'permission-granted',
+      entityType: 'MembershipPermission',
+      entityId: override.id,
+      doneById: userId ?? 'system',
+      metadata: { membership_id: targetMembershipId, permission_code: permissionCode },
+    });
+    return override;
   }
 
   public async revokeDirectPermission(
@@ -78,7 +97,7 @@ export class PermissionService {
     }
 
     await this.validateScope(targetMembershipId, scope, scopeId, adminMembership);
-    return (this.prisma.membershipPermission.upsert as any)({
+    const override = await (this.prisma.membershipPermission.upsert as any)({
       where: {
         membershipId_permissionId_scope_scopeId: {
           membershipId: targetMembershipId,
@@ -98,6 +117,15 @@ export class PermissionService {
         action: 'REVOKE',
       },
     });
+    await this.auditLogs.createLog({
+      category: ENFeature.ACCESS,
+      action: 'permission-revoked',
+      entityType: 'MembershipPermission',
+      entityId: override.id,
+      doneById: user_id,
+      metadata: { membership_id: targetMembershipId, permission_code: permissionCode },
+    });
+    return override;
   }
 
   public async clearPermissionOverride(
@@ -106,6 +134,12 @@ export class PermissionService {
     scope: ENScopeType = ENScopeType.CLUB,
     scopeId?: string,
   ) {
+    if (scope !== ENScopeType.CLUB || scopeId) {
+      throw new BadRequestException(
+        'Membership permission overrides are club-wide; use role assignments for scoped access.',
+      );
+    }
+
     const permission = await this.prisma.permission.findUnique({
       where: { code: permissionCode },
     });
@@ -133,18 +167,15 @@ export class PermissionService {
     scopeId?: string,
     adminMembership?: Membership,
   ) {
-    if (scope === ENScopeType.TEAM && !scopeId) {
-      throw new BadRequestException('A team is required for a TEAM-scoped override');
+    if (scope !== ENScopeType.CLUB || scopeId) {
+      throw new BadRequestException(
+        'Membership permission overrides are club-wide; use role assignments for scoped access.',
+      );
     }
-    if (scope !== ENScopeType.TEAM && scopeId) {
-      throw new BadRequestException('scopeId is only valid for a TEAM-scoped override');
-    }
-    if (!adminMembership || scope !== ENScopeType.TEAM) return;
+    if (!adminMembership) return;
     const target = await this.prisma.membership.findUnique({ where: { id: targetMembershipId } });
     if (!target || target.clubId !== adminMembership.clubId) {
       throw new BadRequestException('Target membership does not belong to the same club');
     }
-    const team = await this.prisma.team.findFirst({ where: { id: scopeId, clubId: adminMembership.clubId } });
-    if (!team) throw new BadRequestException('Team does not belong to the same club');
   }
 }
