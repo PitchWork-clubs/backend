@@ -71,7 +71,7 @@ export class PermissionService {
       action: 'permission-granted',
       entityType: 'MembershipPermission',
       entityId: override.id,
-      doneById: userId ?? adminMembership?.id,
+      doneById: userId ?? 'system',
       metadata: { membership_id: targetMembershipId, permission_code: permissionCode },
     });
     return override;

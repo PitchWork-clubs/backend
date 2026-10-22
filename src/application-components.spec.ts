@@ -90,7 +90,7 @@ describe('application services', () => {
     ['AuditLogsService', () => new AuditLogsService(mock)],
     ['CommunicationService', () => new CommunicationService(mock, mock)],
     ['CloudinaryService', () => new CloudinaryService(mock)],
-    ['TasksService', () => new TasksService(mock, mock, mock, mock)],
+    ['TasksService', () => new TasksService(mock, mock, mock, mock, mock)],
     ['TeamService', () => new TeamService(mock)],
   ])('%s can be constructed', (_name, factory) => {
     expect(factory()).toBeDefined();

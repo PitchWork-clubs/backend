@@ -150,7 +150,7 @@ describe('InvitationService invitation lifecycle', () => {
     });
     expect(tx.invitation.update).toHaveBeenCalledWith({
       where: { id: 'invitation-1' },
-      data: { acceptedAt: now },
+      data: { acceptedAt: now, status: ENInvitationStatus.ACCEPTED },
     });
     expect(auditLogs.createLog).toHaveBeenCalledWith(expect.objectContaining({ action: 'INVITATION_ACCEPTED' }), tx);
   });

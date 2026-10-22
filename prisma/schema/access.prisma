@@ -123,6 +123,7 @@ model UserToken {
 
 enum ENInvitationStatus {
   PENDING
+  ACCEPTED
   DISRUPTED
 }
 

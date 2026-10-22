@@ -10,11 +10,7 @@ export class LogEmailProvider implements IEmailProvider {
 
   async sendEmail(message: EmailMessage): Promise<void> {
     this.logger.log(
-      `EMAIL MOCK | to=${message.to} | subject=${message.subject} | text=${message.text}`,
+      `EMAIL MOCK | to=${message.to} | subject=${message.subject}`,
     );
-
-    if (message.html) {
-      this.logger.debug(`EMAIL MOCK HTML | ${message.html}`);
-    }
   }
 }
